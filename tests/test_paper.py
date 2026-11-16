@@ -124,8 +124,11 @@ def test_paper_lehnt_nachkauf_ab(tmp_path):
 def test_parse_runs_mehrere_timeframes():
     from paper_trade import parse_runs
 
-    assert parse_runs("trend_trail@1d,trend_trail@1d+4h") == [
-        ("trend_trail", ["1d"]), ("trend_trail", ["1d", "4h"])]
+    assert parse_runs("trend_trail@1d,trend_trail@1d+4h~0.5") == [
+        ("trend_trail", ["1d"], 0.01, "trend_trail@1d"),
+        ("trend_trail", ["1d", "4h"], 0.005, "trend_trail@1d+4h~0.5")]
+    with pytest.raises(SystemExit):
+        parse_runs("trend_trail@1d~2")          # mehr als 1 % ist nicht erlaubt
     with pytest.raises(SystemExit):
         parse_runs("trend_trail@7x")
     with pytest.raises(SystemExit):

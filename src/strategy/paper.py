@@ -164,6 +164,8 @@ class PaperTrader:
 
     def __init__(self, store: PaperStore, name: str, strategy: Strategy, timeframes: list[str],
                  *, start_equity: float = 1000.0, risk: RiskConfig | None = None, now: int = 0):
+        if risk is not None and risk.research_only:
+            raise ValueError("Forschungs-Risikoeinstellungen sind im Paper Trading nicht erlaubt")
         if strategy.pyramid_max:
             raise ValueError("Nachkauf (Pyramiding) ist im Paper Trading noch nicht umgesetzt")
         self.store, self.name, self.strategy, self.timeframes = store, name, strategy, timeframes

@@ -424,3 +424,19 @@ def test_daytrading_schliesst_zum_tagesende(monkeypatch):
     res = run_backtest({"BTC": df}, "1h", strat)
     (trade,) = res.trades
     assert trade.exit_reason == "Tagesende" and trade.exit_time == 240 * H   # 00:00 Tag 10
+
+
+def test_forschungsmodus_nur_fuer_backtest(tmp_path):
+    from strategy.paper import PaperStore, PaperTrader
+
+    with pytest.raises(ValueError):
+        RiskConfig(risk_per_trade=0.02)                       # normal weiterhin verboten
+    rc = RiskConfig.for_research(0.02)
+    assert rc.research_only and rc.risk_per_trade == 0.02 and rc.max_leverage == 3
+    with pytest.raises(ValueError):
+        RiskConfig.for_research(0.06)                         # auch hier eine Obergrenze
+    with pytest.raises(ValueError):
+        RiskConfig.for_research(0.02, max_leverage=5)         # Hebel bleibt hart begrenzt
+    with PaperStore(tmp_path / "p.db") as ps:
+        with pytest.raises(ValueError):
+            PaperTrader(ps, "x@1d", STRATEGIES["trend_trail"], ["1d"], risk=rc)

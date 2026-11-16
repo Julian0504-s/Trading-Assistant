@@ -213,12 +213,26 @@ Stand 16.11.2026 (07/2020–10/2026, 10.000 USDT): +507 % bzw. +33 % pro Jahr, j
 Kalenderjahr positiv (2022: +5 %), tiefster Kontostand 9.781 USDT, größter Rückgang
 −29 %, Positionsvolumen nie über 0,93x des Kontos.
 
+## Verbesserungs-Check (lange Daten, jeder Punkt getrennt)
+
+```bash
+uv run python scripts/improvements.py --part 1   # Risiko pro Trade (nur Gedankenexperiment)
+uv run python scripts/improvements.py --part 2   # Ideen auf nie gesehenen Daten 2020–2022
+uv run python scripts/improvements.py --part 3   # 20 statt 10 Coins
+```
+
+Höheres Risiko pro Trade gibt es nur über `RiskConfig.for_research(...)` – Paper Trading
+und Live lehnen das ab. Stand 16.11.2026: Nur „1d + 4h in einem Konto“ ist bei gleichem
+Rückgang besser als die Basis; mit 0,5 % Risiko pro Trade (`trend_trail@1d+4h~0.5`) rund
++52 % pro Jahr bei −36 % max. Rückgang (Basis: +33 % / −29 %). Nachkauf und mehr Coins
+bringen keine echte Verbesserung.
+
 ## Paper Trading
 
 ```bash
 uv run python scripts/paper_trade.py                       # läuft dauerhaft (PAPER_RUNS)
-uv run python scripts/paper_trade.py --runs trend_trail@1d,trend_trail@1d+4h
-# "1d+4h" = beide Timeframes in EINEM gemeinsamen Konto
+uv run python scripts/paper_trade.py --runs trend_trail@1d,trend_trail@1d+4h~0.5
+# "1d+4h" = beide Timeframes in EINEM gemeinsamen Konto, "~0.5" = 0,5 % Risiko pro Trade
 uv run python scripts/paper_trade.py --status              # Kontostände
 uv run python scripts/paper_trade.py --export orders.csv   # Order-Log (CSV, für die Steuer)
 ```

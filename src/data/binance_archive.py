@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import time
 import zipfile
 
 import httpx
@@ -65,8 +66,20 @@ def fetch_month(client: httpx.Client, kind: str, symbol: str, month: str,
         url = f"{BASE}/klines/{symbol}/{timeframe}/{symbol}-{timeframe}-{month}.zip"
     else:
         url = f"{BASE}/fundingRate/{symbol}/{symbol}-fundingRate-{month}.zip"
-    resp = client.get(url)
-    if resp.status_code == 404:
-        return None  # Coin damals noch nicht gelistet
-    resp.raise_for_status()
-    return resp.content
+    for attempt in range(5):
+        try:
+            resp = client.get(url)
+        except httpx.TransportError as e:
+            err: Exception = e
+        else:
+            if resp.status_code == 404:
+                return None  # Coin damals noch nicht gelistet
+            if resp.status_code < 500 and resp.status_code != 429:
+                resp.raise_for_status()
+                return resp.content
+            err = httpx.HTTPStatusError(f"HTTP {resp.status_code}", request=resp.request,
+                                        response=resp)
+        wait = 2 ** attempt
+        log.warning("%s: %s – neuer Versuch in %ss", url, err, wait)
+        time.sleep(wait)
+    raise err

@@ -49,21 +49,31 @@ from common import (
 
 log = logging.getLogger("paper")
 
-DEFAULT_RUNS = "trend_trail@1d,trend_trail@1d+4h,trend@1d"
+DEFAULT_RUNS = "trend_trail@1d,trend_trail@1d+4h~0.5"
 WINDOW = 400  # Kerzen pro Auswertung (EMA 200 braucht Vorlauf)
 
 
-def parse_runs(value: str) -> list[tuple[str, list[str]]]:
-    """'trend_trail@1d,trend_trail@1d+4h' -> [(trend_trail, [1d]), (trend_trail, [1d, 4h])].
-    Mehrere Timeframes mit '+' laufen in EINEM gemeinsamen Konto."""
+def parse_runs(value: str) -> list[tuple[str, list[str], float, str]]:
+    """'trend_trail@1d,trend_trail@1d+4h~0.5' ->
+    [(trend_trail, [1d], 0.01, 'trend_trail@1d'),
+     (trend_trail, [1d, 4h], 0.005, 'trend_trail@1d+4h~0.5')].
+    Mehrere Timeframes mit '+' laufen in EINEM gemeinsamen Konto. '~0.5' = Risiko pro
+    Trade in Prozent (Standard 1, höchstens 1 – mehr lehnt der Risk Manager ab)."""
     runs = []
     for item in split_list(value):
-        name, _, tf = item.partition("@")
+        spec, _, risk_txt = item.partition("~")
+        name, _, tf = spec.partition("@")
         tfs = [t for t in tf.split("+") if t]
         if name not in STRATEGIES or not tfs or any(t not in INTERVAL_MS for t in tfs):
-            raise SystemExit(f"Ungültiger Eintrag {item!r} – Format strategie@timeframe oder "
-                             f"strategie@1d+4h, Strategien: {', '.join(STRATEGIES)}")
-        runs.append((name, tfs))
+            raise SystemExit(f"Ungültiger Eintrag {item!r} – Format strategie@timeframe, "
+                             f"strategie@1d+4h oder strategie@1d+4h~0.5, "
+                             f"Strategien: {', '.join(STRATEGIES)}")
+        try:
+            risk = float(risk_txt) / 100 if risk_txt else 0.01
+            RiskConfig(risk_per_trade=risk)
+        except ValueError:
+            raise SystemExit(f"Ungültiges Risiko in {item!r} – erlaubt: über 0 bis 1 (Prozent)")
+        runs.append((name, tfs, risk, item))
     return runs
 
 
@@ -87,15 +97,14 @@ def print_status(db: str) -> None:
 async def run(args: argparse.Namespace) -> None:
     symbols = split_list(args.symbols, upper=True)
     runs = parse_runs(args.runs)
-    tfs = sorted({tf for _, run_tfs in runs for tf in run_tfs})
+    tfs = sorted({tf for _, run_tfs, _, _ in runs for tf in run_tfs})
     notifier = notifier_from_env()
-    risk = RiskConfig()
 
     with CandleStore(args.db) as candles, PaperStore(args.db) as ps:
         now = int(time.time() * 1000)
-        traders = [PaperTrader(ps, f"{name}@{'+'.join(run_tfs)}", STRATEGIES[name], run_tfs,
-                               start_equity=args.capital, risk=risk, now=now)
-                   for name, run_tfs in runs]
+        traders = [PaperTrader(ps, label, STRATEGIES[name], run_tfs, start_equity=args.capital,
+                               risk=RiskConfig(risk_per_trade=run_risk), now=now)
+                   for name, run_tfs, run_risk, label in runs]
         log.info("Paper Trading (DRY_RUN) – Konten: %s · Symbole: %s · Telegram %s",
                  ", ".join(t.name for t in traders), ", ".join(symbols),
                  "aktiv" if notifier else "aus")
@@ -177,7 +186,7 @@ def main() -> int:
     p.add_argument("--symbols", default=os.getenv("WATCHLIST", DEFAULT_WATCHLIST))
     p.add_argument("--runs", default=os.getenv("PAPER_RUNS", DEFAULT_RUNS),
                    help="Konten als strategie@timeframe, Komma-getrennt")
-    p.add_argument("--capital", type=float, default=float(os.getenv("PAPER_CAPITAL", "1000")))
+    p.add_argument("--capital", type=float, default=float(os.getenv("PAPER_CAPITAL", "10000")))
     p.add_argument("--db", default=os.getenv("DB_PATH", DEFAULT_DB_PATH))
     p.add_argument("--interval", type=int, default=60, help="Sekunden zwischen Durchläufen")
     p.add_argument("--status", action="store_true", help="Kontostände anzeigen und beenden")

@@ -19,6 +19,7 @@ from pathlib import Path
 HARD_MAX_LEVERAGE = 3.0
 HARD_MAX_RISK_PER_TRADE = 0.01
 HARD_MAX_DAILY_LOSS = 0.05  # Obergrenze für das konfigurierbare Tagesverlust-Limit
+RESEARCH_MAX_RISK_PER_TRADE = 0.05  # nur für Backtest-Vergleiche (for_research)
 
 
 class RiskViolation(Exception):
@@ -30,14 +31,24 @@ class RiskConfig:
     max_leverage: float = 3.0
     risk_per_trade: float = 0.01
     daily_loss_limit: float = 0.03
+    # Nur für Backtest-Vergleiche: erlaubt mehr Risiko pro Trade. Paper Trading und
+    # Live lehnen solche Konfigurationen ab (siehe strategy.paper.PaperTrader).
+    research_only: bool = False
 
     def __post_init__(self) -> None:
         if not 0 < self.max_leverage <= HARD_MAX_LEVERAGE:
             raise ValueError(f"max_leverage muss in (0, {HARD_MAX_LEVERAGE}] liegen")
-        if not 0 < self.risk_per_trade <= HARD_MAX_RISK_PER_TRADE:
-            raise ValueError(f"risk_per_trade muss in (0, {HARD_MAX_RISK_PER_TRADE}] liegen")
+        max_risk = RESEARCH_MAX_RISK_PER_TRADE if self.research_only else HARD_MAX_RISK_PER_TRADE
+        if not 0 < self.risk_per_trade <= max_risk:
+            raise ValueError(f"risk_per_trade muss in (0, {max_risk}] liegen")
         if not 0 < self.daily_loss_limit <= HARD_MAX_DAILY_LOSS:
             raise ValueError(f"daily_loss_limit muss in (0, {HARD_MAX_DAILY_LOSS}] liegen")
+
+    @classmethod
+    def for_research(cls, risk_per_trade: float, **kw) -> RiskConfig:
+        """Backtest-Vergleich mit höherem Risiko pro Trade (max. 5 %). Hebel bleibt <= 3x.
+        NIE für Paper Trading oder Live – dort wird so eine Konfiguration abgelehnt."""
+        return cls(risk_per_trade=risk_per_trade, research_only=True, **kw)
 
 
 def _utc_day(ms: int) -> str:
