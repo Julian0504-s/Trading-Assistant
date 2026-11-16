@@ -17,6 +17,7 @@ from dashboard import queries as data
 from dashboard.charts import detail_chart
 from dashboard.theme import palette
 from data import settings
+from signals.rules import FUNDING_EXTREME_PER_8H
 
 DISCLAIMER = "Signale sind Hinweise, keine Anlageempfehlung."
 
@@ -26,6 +27,7 @@ SYMBOLS = settings.watchlist()
 TIMEFRAMES = settings.timeframes()
 # Für Tests/ohne Netz: keine Live-Abfragen an Bitunix
 OFFLINE = os.getenv("DASHBOARD_OFFLINE") == "1"
+FUNDING_THRESHOLD = float(os.getenv("FUNDING_EXTREME_PER_8H", FUNDING_EXTREME_PER_8H))
 
 st.set_page_config(page_title="Trading Assistant", page_icon="📈", layout="wide")
 
@@ -40,8 +42,9 @@ def live(symbols: tuple[str, ...]) -> data.LiveData:
 
 
 @st.cache_data(ttl=30, show_spinner=False)
-def overview(symbols: tuple[str, ...], tfs: tuple[str, ...], rsi_tf: str) -> pd.DataFrame:
-    return data.overview(DB, list(symbols), list(tfs), rsi_tf, live(symbols))
+def symbol_cards(symbols: tuple[str, ...], tfs: tuple[str, ...]) -> list[dict]:
+    return data.symbol_cards(DB, list(symbols), list(tfs), live(symbols), signals(),
+                             funding_extreme_per_8h=FUNDING_THRESHOLD)
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -78,38 +81,52 @@ tab_overview, tab_chart, tab_feed = st.tabs(["Marktübersicht", "Chart", "Signal
 
 # ------------------------------------------------------------------------- Übersicht
 
+SHORT_TFS = {"1m", "3m", "5m"}
+
+
+def _arrow_md(a: str) -> str:
+    return {"▲": ":blue[▲]", "▼": ":red[▼]"}.get(a, "–")
+
+
+def _word_md(word: str) -> str:
+    return {"aufwärts": ":blue[**aufwärts**]", "abwärts": ":red[**abwärts**]",
+            "gemischt": "**gemischt**"}.get(word, "–")
+
+
 with tab_overview:
-    c1, c2 = st.columns([1, 3])
-    rsi_tf = c1.selectbox("RSI-Timeframe", TIMEFRAMES,
-                          index=TIMEFRAMES.index("1h") if "1h" in TIMEFRAMES else 0)
     lv = live(tuple(SYMBOLS))
     if lv.error and not OFFLINE:
         st.warning(f"Live-Daten nicht verfügbar ({lv.error}) – Preise aus der Datenbank.")
-    df = overview(tuple(SYMBOLS), tuple(TIMEFRAMES), rsi_tf)
-
-    col_cfg = {
-        "Preis": st.column_config.NumberColumn(format="%.6g"),
-        "24h %": st.column_config.NumberColumn(format="%+.2f %%"),
-        f"RSI {rsi_tf}": st.column_config.NumberColumn(format="%.1f",
-                                                       help="RSI 14; > 70 überkauft, < 30 überverkauft"),
-        "Funding %": st.column_config.NumberColumn(format="%+.4f %%",
-                                                   help="Aktuelle Funding Rate pro Intervall"),
-    }
-    for tf in TIMEFRAMES:
-        col_cfg[f"Trend {tf}"] = st.column_config.TextColumn(
-            tf, help=f"▲ Schlusskurs über EMA 200, ▼ darunter ({tf})", width="small")
-    st.dataframe(df, hide_index=True, use_container_width=True, column_config=col_cfg)
-    st.caption("Trend: ▲ Schlusskurs über EMA 200 · ▼ darunter · – zu wenig Daten. "
+    cards = symbol_cards(tuple(SYMBOLS), tuple(TIMEFRAMES))
+    cols = st.columns(min(3, max(1, len(cards))))
+    for i, c in enumerate(cards):
+        with cols[i % len(cols)].container(border=True):
+            chg = c["change_24h"]
+            st.metric(
+                c["symbol"],
+                "–" if math.isnan(c["price"]) else f"{c['price']:.6g} USDT",
+                None if math.isnan(chg) else f"{chg:+.2f} % (24h)",
+                delta_color="normal",
+            )
+            st.markdown("**Trend** (Kurs über/unter EMA 200)")
+            for g in c["groups"]:
+                arrows = " ".join(f"{tf} {_arrow_md(c['arrows'][tf])}" for tf in g["tfs"])
+                st.markdown(f"{g['name'].capitalize()}: {_word_md(g['word'])}  \n"
+                            f":gray[{arrows}]")
+            rsi = "–" if math.isnan(c["rsi"]) else f"{c['rsi']:.0f}"
+            fund = "–" if math.isnan(c["funding_pct"]) else f"{c['funding_pct']:+.4f} %"
+            st.markdown(f"**RSI {c['rsi_timeframe']}:** {rsi} · {c['rsi_word']}  \n"
+                        f"**Funding:** {fund} / {c['funding_interval_h']}h · {c['funding_word']}")
+            if c["signals"]:
+                st.markdown("**Letzte wichtige Signale**")
+                for sg in c["signals"]:
+                    st.markdown(f"{sg['Richtung']} · {sg['Timeframe']} · "
+                                f"{sg['Zeit']:%d.%m. %H:%M}  \n:gray[{sg['Begründung']}]")
+            else:
+                st.caption("Keine Signale ab Stärke „mittel“.")
+    st.caption("Trend: kurzfristig = 1m/3m/5m, mittelfristig = 15m/1h, langfristig = 4h/1d. "
+               "RSI über 70 = überkauft, unter 30 = überverkauft. Funding normal < 0,01 %. "
                "Preis und 24h-Änderung live von Bitunix.")
-
-    recent = signals()
-    if not recent.empty:
-        st.subheader("Neueste Signale")
-        st.dataframe(recent.head(8)[["Zeit", "Symbol", "Timeframe", "Richtung", "Stärke",
-                                     "Begründung"]],
-                     hide_index=True, use_container_width=True,
-                     column_config={"Zeit": st.column_config.DatetimeColumn(
-                         format="DD.MM. HH:mm", help="Kerze (UTC)")})
 
 # ----------------------------------------------------------------------------- Chart
 
@@ -118,7 +135,12 @@ with tab_chart:
     symbol = c1.selectbox("Symbol", SYMBOLS)
     tf = c2.selectbox("Timeframe", TIMEFRAMES,
                       index=TIMEFRAMES.index("1h") if "1h" in TIMEFRAMES else 0)
-    n = c3.slider("Kerzen", min_value=50, max_value=500, value=150, step=10)
+    n = c3.slider("Kerzen", min_value=50, max_value=500, value=120, step=10)
+    t1, t2, t3, t4 = st.columns(4)
+    show_ema20 = t1.toggle("EMA 20", value=False)
+    show_bb = t2.toggle("Bollinger Bands", value=False)
+    show_weak = t3.toggle("Schwache Signale", value=False)
+    show_macd = t4.toggle("MACD", value=False)
     full = candles(symbol, tf)
     if full.empty:
         st.info("Keine Kerzen in der Datenbank – links auf „Daten aktualisieren“ klicken.")
@@ -126,17 +148,12 @@ with tab_chart:
         view = full.iloc[-n:]
         sig = signals()
         sig = sig[(sig["Symbol"] == symbol) & (sig["Timeframe"] == tf)]
-        last = view.iloc[-1]
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Schluss (letzte Kerze)", f"{last['close']:.6g}")
-        m2.metric("RSI 14", "–" if math.isnan(last["rsi_14"]) else f"{last['rsi_14']:.1f}")
-        m3.metric("ATR 14", f"{last['atr_14'] / last['close'] * 100:.2f} %")
-        m4.metric("Signale im Ausschnitt", int((sig["Zeit"] >= view.index[0]).sum()))
-        fig = detail_chart(view, sig, theme, f"{symbol} · {tf}")
+        fig = detail_chart(view, sig, theme, f"{symbol} · {tf}", show_ema20=show_ema20,
+                           show_bb=show_bb, show_weak=show_weak, show_macd=show_macd)
         st.plotly_chart(fig, use_container_width=True, theme=None,
                         config={"displaylogo": False, "scrollZoom": True})
-        st.caption(f"Kerzen in UTC, nur abgeschlossene. ▲/▼ = Signale (Größe = Stärke, "
-                   f"Details beim Darüberfahren). {DISCLAIMER}")
+        st.caption(f"Kerzen in UTC, nur abgeschlossene. ▲/▼ = Signale ab „mittel“ (Größe = Stärke, "
+                   f"Begründung beim Darüberfahren). {DISCLAIMER}")
 
 # ------------------------------------------------------------------------ Signal-Feed
 
@@ -150,10 +167,14 @@ with tab_feed:
         sel_tf = f2.multiselect("Timeframe", TIMEFRAMES + ["funding"], placeholder="alle")
         sel_rule = f3.multiselect("Regel", list(data.RULE_LABEL.values()), placeholder="alle")
         sel_dir = f4.selectbox("Richtung", ["alle", "bullisch", "bärisch"])
-        min_strength = f5.selectbox("Stärke ab", [1, 2, 3],
+        min_strength = f5.selectbox("Stärke ab", [1, 2, 3], index=1,
                                     format_func=lambda v: {1: "schwach", 2: "mittel",
                                                            3: "stark"}[v])
+        hide_short = st.toggle("1m, 3m und 5m ausblenden", value=True,
+                               help="Auf kleinen Timeframes gibt es sehr viele Signale.")
         mask = feed["Stärke_n"] >= min_strength
+        if hide_short and not sel_tf:
+            mask &= ~feed["Timeframe"].isin(SHORT_TFS)
         if sel_sym:
             mask &= feed["Symbol"].isin(sel_sym)
         if sel_tf:
@@ -165,13 +186,11 @@ with tab_feed:
         shown = feed[mask]
         st.caption(f"{len(shown)} von {len(feed)} Signalen · neueste zuerst")
         st.dataframe(
-            shown[["Zeit", "Symbol", "Timeframe", "Regel", "Richtung", "Stärke", "Preis",
-                   "Begründung"]],
+            shown[["Zeit", "Symbol", "Timeframe", "Richtung", "Stärke", "Begründung"]],
             hide_index=True, use_container_width=True, height=600,
             column_config={
-                "Zeit": st.column_config.DatetimeColumn(format="DD.MM.YYYY HH:mm",
+                "Zeit": st.column_config.DatetimeColumn(format="DD.MM. HH:mm",
                                                         help="Kerze (UTC); bei Funding: Abrechnung"),
-                "Preis": st.column_config.NumberColumn(format="%.6g"),
                 "Begründung": st.column_config.TextColumn(width="large"),
             },
         )
