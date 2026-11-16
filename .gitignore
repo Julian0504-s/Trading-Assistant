@@ -1,0 +1,17 @@
+# Geheimnisse – niemals committen
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Lokale Daten
+/data/
+*.db
+*.sqlite
+*.sqlite3
