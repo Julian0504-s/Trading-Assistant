@@ -22,23 +22,13 @@ from bitunix.client import INTERVAL_MS, BitunixError, BitunixPublicClient
 from data.store import CandleStore
 from data.sync import sync_candles
 
-DEFAULT_WATCHLIST = "BTCUSDT,ETHUSDT,SOLUSDT"
-DEFAULT_TIMEFRAMES = "1m,3m,5m,15m,1h,4h,1d"
-DEFAULT_DB_PATH = "data/market.db"
-
-
-def _load_dotenv(path: str = ".env") -> None:
-    """Minimaler .env-Leser (nur KEY=VALUE), überschreibt keine gesetzten Variablen."""
-    if not os.path.exists(path):
-        return
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
+from common import (
+    DEFAULT_DB_PATH,
+    DEFAULT_TIMEFRAMES,
+    DEFAULT_WATCHLIST,
+    load_dotenv,
+    setup_logging,
+)
 
 def _fmt(ms: int | None) -> str:
     if ms is None:
@@ -47,7 +37,7 @@ def _fmt(ms: int | None) -> str:
 
 
 async def main() -> int:
-    _load_dotenv()
+    load_dotenv()
     parser = argparse.ArgumentParser(description="Kerzen für die Watchlist laden")
     parser.add_argument("--symbols", default=os.getenv("WATCHLIST", DEFAULT_WATCHLIST))
     parser.add_argument(
@@ -61,8 +51,7 @@ async def main() -> int:
     parser.add_argument("--db", default=os.getenv("DB_PATH", DEFAULT_DB_PATH))
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    logging.getLogger("httpx").setLevel(logging.WARNING)  # nicht jede Anfrage loggen
+    setup_logging()
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     timeframes = [t.strip() for t in args.timeframes.split(",") if t.strip()]
     unknown = [t for t in timeframes if t not in INTERVAL_MS]

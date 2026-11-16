@@ -218,3 +218,13 @@ def test_signal_validierung():
         Signal("X", "1h", "r", "up", 1, "", 1.0, 0)
     with pytest.raises(ValueError):
         Signal("X", "1h", "r", "long", 4, "", 1.0, 0)
+
+
+def test_scan_is_fresh_letzte_drei_kerzen():
+    from signals.scan import ScanResult
+
+    r = ScanResult(latest_candle={("BTCUSDT", "1h"): 10 * H})
+    fresh = [r.is_fresh(sig(t * H)) for t in (7, 8, 10)]
+    assert fresh == [False, True, True]
+    assert not r.is_fresh(sig(10 * H, sym="ETHUSDT"))  # keine Kerzen bekannt
+    assert r.is_fresh(Signal("X", "funding", "funding_extreme", "long", 1, "", 1.0, 0))

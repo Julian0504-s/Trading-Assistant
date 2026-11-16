@@ -4,6 +4,7 @@ Aufruf:
     uv run python scripts/run_signals.py            # Kerzen aus der DB + Funding live
     uv run python scripts/run_signals.py --fetch    # vorher Kerzen nachladen
     uv run python scripts/run_signals.py --feed 30  # zusätzlich die 30 neuesten Signale zeigen
+    uv run python scripts/run_signals.py --alert    # neue Signale per Telegram melden
 
 Beim ersten Lauf werden auch historische Signale aus den vorhandenen Kerzen
 nachgetragen (für Chart-Marker); angezeigt werden davon nur die Anzahl.
@@ -20,19 +21,24 @@ import os
 import sys
 from datetime import UTC, datetime
 
-from bitunix.client import INTERVAL_MS, BitunixError, BitunixPublicClient
+from bitunix.client import BitunixError, BitunixPublicClient
 from data.store import CandleStore
 from data.sync import sync_candles
+from alerts import CooldownStore, TelegramError, dispatch
 from signals import DIRECTION_LABEL, STRENGTH_LABEL, Signal, SignalStore
 from signals.rules import FUNDING_EXTREME_PER_8H
 from signals.scan import scan_watchlist
 
-sys.path.insert(0, os.path.dirname(__file__))
-from fetch_candles import (  # noqa: E402
+from common import (
     DEFAULT_DB_PATH,
     DEFAULT_TIMEFRAMES,
     DEFAULT_WATCHLIST,
-    _load_dotenv,
+    alert_policy_from_env,
+    check_timeframes,
+    load_dotenv,
+    notifier_from_env,
+    setup_logging,
+    split_list,
 )
 
 
@@ -46,14 +52,32 @@ def _line(s: Signal) -> str:
             f"{DIRECTION_LABEL[s.direction]:<8} {STRENGTH_LABEL[s.strength]:<7} {s.reason}")
 
 
+async def _send_alerts(fresh: list[Signal], db: str) -> None:
+    policy = alert_policy_from_env()
+    notifier = notifier_from_env()
+    with CooldownStore(db) as cooldowns:
+        try:
+            if notifier is None:
+                chosen = await dispatch(fresh, policy, cooldowns, None)
+                print(f"\nTelegram nicht konfiguriert (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID) – "
+                      f"{len(chosen)} Signal(e) wären gemeldet worden.")
+            else:
+                async with notifier:
+                    chosen = await dispatch(fresh, policy, cooldowns, notifier)
+                print(f"\nTelegram: {len(chosen)} Signal(e) gemeldet.")
+        except TelegramError as e:
+            logging.error("Telegram-Versand fehlgeschlagen: %s", e)
+
+
 async def main() -> int:
-    _load_dotenv()
+    load_dotenv()
     p = argparse.ArgumentParser(description="Signale erzeugen")
     p.add_argument("--symbols", default=os.getenv("WATCHLIST", DEFAULT_WATCHLIST))
     p.add_argument("--timeframes", default=os.getenv("TIMEFRAMES", DEFAULT_TIMEFRAMES))
     p.add_argument("--db", default=os.getenv("DB_PATH", DEFAULT_DB_PATH))
     p.add_argument("--fetch", action="store_true", help="vorher Kerzen nachladen")
     p.add_argument("--feed", type=int, default=0, metavar="N", help="N neueste Signale zeigen")
+    p.add_argument("--alert", action="store_true", help="neue Signale per Telegram melden")
     p.add_argument(
         "--funding-threshold", type=float,
         default=float(os.getenv("FUNDING_EXTREME_PER_8H", FUNDING_EXTREME_PER_8H)),
@@ -61,13 +85,9 @@ async def main() -> int:
     )
     args = p.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
-    timeframes = [t.strip() for t in args.timeframes.split(",") if t.strip()]
-    unknown = [t for t in timeframes if t not in INTERVAL_MS]
-    if unknown:
-        p.error(f"Unbekannte Timeframes {unknown}")
+    setup_logging()
+    symbols = split_list(args.symbols, upper=True)
+    timeframes = check_timeframes(split_list(args.timeframes))
 
     with CandleStore(args.db) as candles, SignalStore(args.db) as store:
         async with BitunixPublicClient() as client:
@@ -85,12 +105,15 @@ async def main() -> int:
 
         fresh = [s for s in result.new if result.is_fresh(s)]
         historic = len(result.new) - len(fresh)
-        print(f"\nNeue Signale an der aktuellen Kerze: {len(fresh)}"
+        print(f"\nNeue aktuelle Signale (letzte 3 Kerzen): {len(fresh)}"
               + (f"  (+ {historic} historische nachgetragen)" if historic else ""))
         for s in fresh:
             print("  " + _line(s))
         for err in result.errors:
             print(f"  Hinweis: {err}")
+
+        if args.alert:
+            await _send_alerts(fresh, args.db)
 
         if args.feed:
             print(f"\nSignal-Feed (neueste {args.feed}):")

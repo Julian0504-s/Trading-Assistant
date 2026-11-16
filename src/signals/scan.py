@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from bitunix.client import BitunixError, BitunixPublicClient
+from bitunix.client import INTERVAL_MS, BitunixError, BitunixPublicClient
 from data.store import CandleStore
 from indicators import add_all
 
@@ -14,6 +14,9 @@ from .rules import FUNDING_EXTREME_PER_8H, evaluate_candles, funding_extreme
 from .store import SignalStore
 
 log = logging.getLogger(__name__)
+
+# Signale an den letzten N Kerzen gelten als aktuell (werden gemeldet)
+FRESH_CANDLES = 3
 
 
 @dataclass
@@ -24,11 +27,18 @@ class ScanResult:
     latest_candle: dict[tuple[str, str], int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
-    def is_fresh(self, s: Signal) -> bool:
-        """Signal an der neuesten abgeschlossenen Kerze (oder Funding)?"""
+    def is_fresh(self, s: Signal, max_candles: int = FRESH_CANDLES) -> bool:
+        """Signal an einer der letzten `max_candles` abgeschlossenen Kerzen (oder Funding)?
+
+        Etwas Spielraum, damit nach einer kurzen Pause (mehrere neue Kerzen auf
+        einmal) keine aktuellen Signale als "historisch" verloren gehen.
+        """
         if s.timeframe == "funding":
             return True
-        return self.latest_candle.get((s.symbol, s.timeframe)) == s.candle_time
+        latest = self.latest_candle.get((s.symbol, s.timeframe))
+        if latest is None:
+            return False
+        return s.candle_time > latest - max_candles * INTERVAL_MS[s.timeframe]
 
 
 async def scan_watchlist(

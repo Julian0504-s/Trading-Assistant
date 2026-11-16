@@ -18,7 +18,9 @@ Details und Phasenplan: siehe `CLAUDE.md`.
 - `scripts/fetch_candles.py` – lädt Kerzen für Watchlist × Timeframes
   (Standard: 1m, 3m, 5m, 15m, 1h, 4h, 1d) in SQLite
 - `scripts/show_indicators.py` – Terminal-Übersicht der aktuellen Indikatorwerte
-- `scripts/run_signals.py` – Signale erzeugen, speichern und anzeigen
+- `src/alerts/` – Telegram-Alerts mit Filter (Stärke, Timeframes) und Cooldown
+- `scripts/run_signals.py` – Signale erzeugen, speichern, anzeigen (optional melden)
+- `scripts/watch.py` – Dauerbetrieb: nachladen → Signale → Telegram, jede Minute
 
 ## Einrichtung
 
@@ -81,6 +83,28 @@ werden auch historische Signale aus den vorhandenen Kerzen nachgetragen.
 **Funding-Einheiten:** Die aktuellen Funding-Endpunkte liefern Prozent, der
 Historien-Endpunkt Brüche (in der Doku nicht angegeben, live geprüft). Intern wird
 alles als Bruch gespeichert.
+
+## Telegram-Alerts & Dauerbetrieb
+
+1. Bei [@BotFather](https://t.me/BotFather) einen Bot anlegen und den Token kopieren.
+2. Dem Bot eine Nachricht schreiben, dann `https://api.telegram.org/bot<TOKEN>/getUpdates`
+   öffnen und `"chat":{"id": …}` ablesen.
+3. In `.env` eintragen: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (siehe `.env.example`).
+
+```bash
+uv run python scripts/watch.py                 # läuft dauerhaft, Strg+C beendet
+uv run python scripts/run_signals.py --fetch --alert   # einmaliger Durchlauf mit Alerts
+```
+
+- Gemeldet werden nur **aktuelle** Signale (letzte 3 Kerzen), nie die historisch nachgetragenen.
+- Filter: `ALERT_MIN_STRENGTH` (Standard 2 = mittel), `ALERT_TIMEFRAMES` (leer = alle).
+- Cooldown: gleiche Kombination aus Symbol, Timeframe, Regel und Richtung frühestens
+  nach `ALERT_COOLDOWN_MIN` Minuten erneut (Standard 60). Wird in SQLite gespeichert,
+  gilt also auch nach einem Neustart.
+- Alle Signale eines Durchlaufs kommen gebündelt in **einer** Nachricht.
+- Ohne Token läuft alles normal, es wird nur nichts verschickt.
+- Der Token wird nie geloggt (steht in der URL, daher httpx-Logging auf WARNING und
+  geschwärzte Fehlermeldungen).
 
 ## Tests
 

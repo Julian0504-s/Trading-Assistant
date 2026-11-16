@@ -17,13 +17,11 @@ import sys
 from data.store import CandleStore
 from indicators import add_all
 
-# gleiche Defaults wie fetch_candles.py
-sys.path.insert(0, os.path.dirname(__file__))
-from fetch_candles import (  # noqa: E402
+from common import (
     DEFAULT_DB_PATH,
     DEFAULT_TIMEFRAMES,
     DEFAULT_WATCHLIST,
-    _load_dotenv,
+    load_dotenv,
 )
 
 
@@ -32,7 +30,7 @@ def _num(x: float, fmt: str) -> str:
 
 
 def main() -> int:
-    _load_dotenv()
+    load_dotenv()
     p = argparse.ArgumentParser(description="Aktuelle Indikatoren anzeigen")
     p.add_argument("--symbols", default=os.getenv("WATCHLIST", DEFAULT_WATCHLIST))
     p.add_argument("--timeframes", default=os.getenv("TIMEFRAMES", DEFAULT_TIMEFRAMES))
