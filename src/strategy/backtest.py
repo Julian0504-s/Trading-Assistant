@@ -88,11 +88,15 @@ class _Arrays:
         self.atr, self.ema200, self.adx = col("atr_14"), col("ema_200"), col("adx_14")
         self.btc_up = (df["btc_up"].to_numpy(dtype="float64") if "btc_up" in df
                        else np.full(len(df), np.nan))
+        self.htf_up = df["htf_up"].to_numpy(dtype=bool) if "htf_up" in df else None
+        self.htf_down = df["htf_down"].to_numpy(dtype=bool) if "htf_down" in df else None
 
     def row(self, i: int) -> dict:
         b = self.btc_up[i]
         return {"close": self.c[i], "ema_200": self.ema200[i], "adx_14": self.adx[i],
-                "btc_up": None if math.isnan(b) else bool(b)}
+                "btc_up": None if math.isnan(b) else bool(b),
+                "htf_up": None if self.htf_up is None else bool(self.htf_up[i]),
+                "htf_down": None if self.htf_down is None else bool(self.htf_down[i])}
 
 
 def run_streams(
@@ -106,11 +110,16 @@ def run_streams(
     name: str = "",
     timeframe_label: str = "",
     funding: dict[str, pd.DataFrame] | None = None,
+    fee_rate: float | None = None,
+    maker_fee: float | None = None,
 ) -> BacktestResult:
     """Mehrere Streams (Symbol × Timeframe × Strategie) in einem gemeinsamen Konto.
     `funding`: je Symbol eine Tabelle (time, rate, mark) – siehe data.funding.funding_schedule.
     Ohne `funding` wird kein Funding abgerechnet."""
-    acc = SimAccount(start_equity, mode="backtest", risk=RiskManager(risk or RiskConfig()))
+    acc = SimAccount(start_equity, mode="backtest", risk=RiskManager(risk or RiskConfig()),
+                     maker_fee=maker_fee)
+    if fee_rate is not None:
+        acc.fee_rate = fee_rate
     arrs = [_Arrays(s.df) for s in streams]
     steps = [INTERVAL_MS[s.timeframe] for s in streams]
 
@@ -191,6 +200,15 @@ def run_streams(
         if pos is not None:
             acc.check_exit(pos, a.o[i], a.h[i], a.l[i], t, atr)
         last_close[s.symbol] = a.c[i]
+        if strat.flat_at_day_end and t % 86_400_000 == 0:
+            pos = acc.positions.get(key)
+            if pos is not None:
+                acc.close(pos, a.c[i], t, "Tagesende")
+            pending.pop(k, None)
+            eq_t.append(t)
+            eq_v.append(acc.equity(last_close))
+            end_t = t
+            continue  # keine neuen Einstiege über den Tageswechsel
         if a.t[i] < trade_until and not math.isnan(atr) and atr > 0:
             pos = acc.positions.get(key)
             sigs = s.signals.get(int(a.t[i]))

@@ -365,3 +365,62 @@ def test_kombiniertes_konto_kennt_tagesschluss_erst_am_tagesende(monkeypatch):
                 & (eq.index < pd.Timestamp(222 * D, unit="ms", tz="UTC"))]
     assert len(during) == 5 and (during < 1001).all()        # tagsüber: Kurs 100 bekannt
     assert eq[pd.Timestamp(222 * D, unit="ms", tz="UTC")] > 1050   # erst am Tagesende: 200
+
+
+# ------------------------------------------------------------------- Daytrading
+
+def test_htf_trend_nutzt_nur_abgeschlossene_kerzen():
+    from strategy.regime import add_htf_trend
+
+    # 1h-Kerzen über 2 Tage; Tageskerze 0 schließt über EMA (up), Tag 1 darunter
+    idx_h = pd.to_datetime([i * H for i in range(48)], unit="ms", utc=True)
+    ltf = pd.DataFrame({"close": 1.0}, index=idx_h)
+    idx_d = pd.to_datetime([0, 24 * H], unit="ms", utc=True)
+    d1 = pd.DataFrame({"close": [110.0, 90.0], "ema_200": [100.0, 100.0]}, index=idx_d)
+    out = add_htf_trend({"X": ltf}, "1h", {"1d": {"X": d1}})["X"]
+    # Entscheidung am Schluss der 1h-Kerze 22 (23:00): Tag 0 noch nicht fertig -> False
+    assert not out["htf_up"].iloc[22]
+    # Schluss von Kerze 23 = 24:00: Tag 0 ist fertig -> up
+    assert out["htf_up"].iloc[23] and not out["htf_down"].iloc[23]
+    # Tag 1 wird erst am Schluss von Kerze 47 bekannt
+    assert out["htf_up"].iloc[46] and out["htf_down"].iloc[47]
+
+
+def test_htf_filter_in_strategie():
+    from strategy import Strategy
+
+    s = Strategy("x", "x", "x", frozenset({"ema_cross"}), htf_filter=True)
+    r = pd.Series({"close": 100.0, "ema_200": 90.0, "htf_up": True, "htf_down": False})
+    assert s.pick([sig()], r) is not None
+    assert s.pick([sig(direction="short")], r) is None
+    r["htf_up"] = False
+    assert s.pick([sig()], r) is None
+
+
+def test_maker_gebuehr_fuer_einstieg_und_ziel_market_fuer_stop():
+    acc = SimAccount(1000.0, fee_rate=0.0006, slippage=0.0, maker_fee=0.0002)
+    pos = acc.open(symbol="X", timeframe="15m", strategy="t", direction="long", price=100,
+                   time=0, stop=98, target=104, reason="x")
+    assert pos.entry_fee == pytest.approx(500 * 0.0002)
+    t = acc.check_exit(pos, 101, 105, 100, H)
+    assert t.exit_reason == "Kursziel"
+    assert t.fees == pytest.approx(500 * 0.0002 + 520 * 0.0002)
+    pos = acc.open(symbol="X", timeframe="15m", strategy="t", direction="long", price=100,
+                   time=2 * H, stop=98, target=104, reason="x")
+    t = acc.check_exit(pos, 99, 99, 97, 3 * H)
+    assert t.exit_reason == "Stop-Loss"
+    assert t.fees == pytest.approx(pos.entry_fee + pos.qty * 98 * 0.0006)
+
+
+def test_daytrading_schliesst_zum_tagesende(monkeypatch):
+    from strategy import ExitConfig, Strategy
+
+    n = 24 * 12  # 12 Tage 1h
+    df = frame(n)
+    signal = Signal("BTC", "1h", "ema_cross", "long", 2, "x", 100.0, 220 * H)  # Tag 9, 04:00
+    monkeypatch.setattr(bt_module, "evaluate_candles", lambda d, s, tf: [signal])
+    strat = Strategy("d", "d", "d", frozenset({"ema_cross"}), flat_at_day_end=True,
+                     exits=ExitConfig(stop_atr=3, target_atr=10))
+    res = run_backtest({"BTC": df}, "1h", strat)
+    (trade,) = res.trades
+    assert trade.exit_reason == "Tagesende" and trade.exit_time == 240 * H   # 00:00 Tag 10

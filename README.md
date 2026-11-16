@@ -185,6 +185,18 @@ Stand 16.11.2026: Nur „1d + 4h in einem Konto“ erfüllt die Regel (+100 % p.
 +41 %, aber max. Drawdown −55 % statt −28 %). Der Mehrertrag kommt größtenteils von
 mehr Risiko (mehr gleichzeitige Positionen).
 
+## Daytrading-Test
+
+```bash
+uv run python scripts/fetch_candles.py --symbols <10 Coins> --timeframes 15m --history --history-target 15m=70080
+uv run python scripts/daytrade.py
+```
+
+16 Varianten auf 15m/1h mit strengen Filtern (Trend auf eigenem Timeframe, 4h und 1d
+gleichgerichtet, ADX ≥ 25, Schluss zum Tagesende), mit Market- oder Limit-Orders.
+Stand 16.11.2026: **keine** Variante bestand die Auswahl – alle verloren im
+Auswahljahr 35–99 % (bei 1 % Risiko pro Trade). Die 1d-Strategie bleibt die Basis.
+
 ## Paper Trading
 
 ```bash

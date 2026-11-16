@@ -120,6 +120,7 @@ class SimAccount:
     trades: list[Trade] = field(default_factory=list)
     next_id: int = 1
     funding_total: float = 0.0        # Summe erhaltenes (+) / gezahltes (−) Funding
+    maker_fee: float | None = None    # gesetzt: Einstieg und Kursziel als Limit-Order
 
     def __post_init__(self) -> None:
         if self.cash == 0.0:
@@ -154,7 +155,7 @@ class SimAccount:
             qty = self.risk.size_position(equity, fill, stop, self.open_notional())
         except RiskViolation:
             return None
-        fee = qty * fill * self.fee_rate
+        fee = qty * fill * (self.maker_fee if self.maker_fee is not None else self.fee_rate)
         self.cash -= fee
         pid = next(self._ids)
         self.next_id = pid + 1
@@ -166,8 +167,12 @@ class SimAccount:
         return pos
 
     def close(self, pos: Position, price: float, time: int, reason: str) -> Trade:
-        fill = price * (1 - self.slippage if pos.direction == "long" else 1 + self.slippage)
-        fee = pos.qty * fill * self.fee_rate
+        if self.maker_fee is not None and reason == "Kursziel":
+            # Limit-Order am Ziel: kein Slippage, Maker-Gebühr
+            fill, fee = price, pos.qty * price * self.maker_fee
+        else:
+            fill = price * (1 - self.slippage if pos.direction == "long" else 1 + self.slippage)
+            fee = pos.qty * fill * self.fee_rate
         gross = pos.unrealized(fill)
         pnl = gross - fee - pos.entry_fee + pos.funding
         self.cash += gross - fee

@@ -53,6 +53,8 @@ class Strategy:
     btc_filter: bool = False      # Long nur, wenn BTC über EMA 200 (Short nur darunter)
     pyramid_max: int = 0          # max. Nachkäufe pro Position (0 = aus)
     pyramid_step_atr: float = 2.0 # Nachkauf, wenn Kurs so viele ATR weitergelaufen ist
+    htf_filter: bool = False      # Long nur, wenn 4h UND 1d über EMA 200 (Short: beide darunter)
+    flat_at_day_end: bool = False # Daytrading: alle Positionen um 00:00 UTC schließen
 
     def pick(self, signals: list[Signal], row: pd.Series) -> Signal | None:
         """Wählt aus den Signalen einer Kerze das zu handelnde (stärkstes zuerst)."""
@@ -60,6 +62,11 @@ class Strategy:
                       if s.rule in self.rules and s.strength >= self.min_strength]
         if self.long_only:
             candidates = [s for s in candidates if s.direction == "long"]
+        if self.htf_filter:
+            up, down = row.get("htf_up"), row.get("htf_down")
+            candidates = [s for s in candidates
+                          if (s.direction == "long" and up is True)
+                          or (s.direction == "short" and down is True)]
         if self.btc_filter:
             btc_up = row.get("btc_up")
             if btc_up is None or pd.isna(btc_up):
