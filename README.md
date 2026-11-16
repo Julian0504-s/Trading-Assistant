@@ -19,6 +19,7 @@ Details und Phasenplan: siehe `CLAUDE.md`.
   (Standard: 1m, 3m, 5m, 15m, 1h, 4h, 1d) in SQLite
 - `scripts/show_indicators.py` – Terminal-Übersicht der aktuellen Indikatorwerte
 - `src/alerts/` – Telegram-Alerts mit Filter (Stärke, Timeframes) und Cooldown
+- `src/dashboard/` – Streamlit-Dashboard: Marktübersicht, Detail-Chart, Signal-Feed
 - `scripts/run_signals.py` – Signale erzeugen, speichern, anzeigen (optional melden)
 - `scripts/watch.py` – Dauerbetrieb: nachladen → Signale → Telegram, jede Minute
 
@@ -83,6 +84,26 @@ werden auch historische Signale aus den vorhandenen Kerzen nachgetragen.
 **Funding-Einheiten:** Die aktuellen Funding-Endpunkte liefern Prozent, der
 Historien-Endpunkt Brüche (in der Doku nicht angegeben, live geprüft). Intern wird
 alles als Bruch gespeichert.
+
+## Dashboard
+
+```bash
+uv run streamlit run src/dashboard/app.py
+```
+
+Öffnet sich im Browser (http://localhost:8501).
+
+- **Marktübersicht:** Preis und 24h-Änderung (live), Trend pro Timeframe
+  (▲/▼ = Schluss über/unter EMA 200), RSI 14 für einen wählbaren Timeframe, aktuelle
+  Funding Rate, dazu die neuesten Signale.
+- **Chart:** Kerzen mit EMA 20/50/200 und Bollinger Bands, darunter Volumen, RSI und
+  MACD. Signale als ▲/▼ (Größe = Stärke, Begründung beim Darüberfahren).
+- **Signal-Feed:** alle gespeicherten Signale, neueste zuerst, filterbar nach Symbol,
+  Timeframe, Regel, Richtung und Stärke.
+- „Daten aktualisieren“ in der Seitenleiste lädt Kerzen nach und berechnet Signale neu.
+  Für Daten im Dauerbetrieb parallel `scripts/watch.py` laufen lassen.
+- Steigend/fallend ist Blau/Rot (auch bei Rot-Grün-Schwäche unterscheidbar);
+  helles und dunkles Theme haben eigene Farbstufen.
 
 ## Telegram-Alerts & Dauerbetrieb
 
