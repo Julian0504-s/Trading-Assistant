@@ -186,3 +186,42 @@ def test_get_funding_rate_objekt_und_liste():
         assert fr.funding_rate == pytest.approx(0.000105)
         assert fr.funding_interval_h == 8
         assert fr.next_funding_time == 1794816000000
+
+
+def test_3m_wird_akzeptiert():
+    m = 3 * 60_000
+
+    def handler(req):
+        assert req.url.params["interval"] == "3m"
+        return ok([raw_kline(2 * m), raw_kline(m)])
+
+    async def go():
+        async with make_client(handler) as c:
+            return await c.get_klines("BTCUSDT", "3m")
+
+    assert [k.open_time for k in run(go())] == [m, 2 * m]
+
+
+def test_falscher_kerzenabstand_wird_erkannt():
+    # angefragt 3m, geliefert aber 1m-Kerzen
+    def handler(req):
+        return ok([raw_kline(120_000), raw_kline(60_000)])
+
+    async def go():
+        async with make_client(handler) as c:
+            await c.get_klines("BTCUSDT", "3m")
+
+    with pytest.raises(BitunixAPIError, match="Kerzenabstand"):
+        run(go())
+
+
+def test_luecken_im_kerzenabstand_sind_ok():
+    # z. B. Wartungspause: 1h fehlt, Abstand 2h ist trotzdem ein Vielfaches
+    def handler(req):
+        return ok([raw_kline(4 * H), raw_kline(2 * H), raw_kline(H)])
+
+    async def go():
+        async with make_client(handler) as c:
+            return await c.get_klines("BTCUSDT", "1h")
+
+    assert len(run(go())) == 3

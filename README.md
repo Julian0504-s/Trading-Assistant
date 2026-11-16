@@ -10,7 +10,8 @@ Details und Phasenplan: siehe `CLAUDE.md`.
 - `src/bitunix/` – async Client für die **öffentlichen** Futures-Marktdaten
   (Kerzen, Ticker, Funding Rate). Kein API-Key nötig.
 - `src/data/` – SQLite-Cache für Kerzen und inkrementelles Laden
-- `scripts/fetch_candles.py` – lädt Kerzen für die Watchlist in SQLite
+- `scripts/fetch_candles.py` – lädt Kerzen für Watchlist × Timeframes
+  (Standard: 1m, 3m, 5m, 15m, 1h, 4h, 1d) in SQLite
 
 ## Einrichtung
 
@@ -22,12 +23,13 @@ cp .env.example .env   # optional: Watchlist / DB-Pfad anpassen
 ## Kerzen laden
 
 ```bash
-uv run python scripts/fetch_candles.py                  # 1h, Watchlist aus .env
-uv run python scripts/fetch_candles.py --interval 4h
+uv run python scripts/fetch_candles.py                  # Watchlist + Timeframes aus .env
+uv run python scripts/fetch_candles.py --timeframes 1h,4h
 uv run python scripts/fetch_candles.py --symbols BTCUSDT --backfill 1000
 ```
 
-Beim ersten Lauf werden die letzten `--backfill` Kerzen geladen (Standard: 500).
+Beim ersten Lauf werden pro Timeframe die letzten `--backfill` Kerzen geladen
+(Standard: 500; bei 1m sind das nur gut 8 Stunden).
 Danach lädt jeder Lauf nur noch fehlende Kerzen nach. Gespeichert werden nur
 abgeschlossene Kerzen (so liefert sie die API).
 
@@ -44,7 +46,7 @@ Quelle: offizielle Doku unter https://www.bitunix.com/api-docs/futures/
 
 | Daten       | Endpunkt                                    | Hinweise                                        |
 |-------------|---------------------------------------------|-------------------------------------------------|
-| Kerzen      | `GET /api/v1/futures/market/kline`          | max. 200 pro Abfrage, `endTime` exklusiv        |
+| Kerzen      | `GET /api/v1/futures/market/kline`          | max. 200 pro Abfrage, `endTime` exklusiv; `3m` undokumentiert, live getestet |
 | Ticker      | `GET /api/v1/futures/market/tickers`        | `symbols=BTCUSDT,ETHUSDT`                       |
 | Funding     | `GET /api/v1/futures/market/funding_rate`   | `symbol=BTCUSDT`                                |
 | Funding alle| `GET /api/v1/futures/market/funding_rate/batch` |                                             |

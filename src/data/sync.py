@@ -39,7 +39,12 @@ async def sync_candles(
     now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
 
     latest = store.latest_open_time(symbol, interval)
-    start = latest if latest is not None else now_ms - backfill * step
+    if latest is not None:
+        start = latest
+    else:
+        # Auf den Beginn der laufenden (noch offenen) Kerze abrunden, damit genau
+        # `backfill` abgeschlossene Kerzen geladen werden.
+        start = (now_ms // step) * step - backfill * step
 
     klines = await client.get_klines_since(symbol, interval, start)
     store.upsert(symbol, interval, klines)

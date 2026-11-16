@@ -29,8 +29,11 @@ BASE_URL = "https://fapi.bitunix.com"
 MARKET_PATH = "/api/v1/futures/market"
 
 # Laut Doku: 1m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 3d 1w 1M
+# Zusätzlich 3m: NICHT in der Doku, aber live getestet (liefert echte 3-Minuten-Kerzen).
+# get_klines() prüft den Kerzenabstand, falls Bitunix das je stillschweigend ändert.
 INTERVAL_MS: dict[str, int] = {
     "1m": 60_000,
+    "3m": 3 * 60_000,
     "5m": 5 * 60_000,
     "15m": 15 * 60_000,
     "30m": 30 * 60_000,
@@ -214,7 +217,22 @@ class BitunixPublicClient:
         )
         klines = [Kline.from_api(d) for d in data or []]
         klines.sort(key=lambda k: k.open_time)  # API liefert neueste zuerst
+        self._check_spacing(symbol, interval, klines)
         return klines
+
+    @staticmethod
+    def _check_spacing(symbol: str, interval: str, klines: list[Kline]) -> None:
+        """Abstand der Kerzen muss ein Vielfaches des Intervalls sein (Lücken sind ok)."""
+        step = INTERVAL_MS.get(interval)
+        if step is None:  # 1M: variable Länge
+            return
+        for a, b in zip(klines, klines[1:]):
+            diff = b.open_time - a.open_time
+            if diff <= 0 or diff % step:
+                raise BitunixAPIError(
+                    f"Unerwarteter Kerzenabstand für {symbol} {interval}: {diff} ms "
+                    f"(erwartet Vielfaches von {step} ms)"
+                )
 
     async def get_klines_since(
         self,
