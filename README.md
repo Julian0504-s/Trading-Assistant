@@ -224,8 +224,9 @@ uv run python scripts/improvements.py --part 3   # 20 statt 10 Coins
 Höheres Risiko pro Trade gibt es nur über `RiskConfig.for_research(...)` – Paper Trading
 und Live lehnen das ab. Stand 16.11.2026: Nur „1d + 4h in einem Konto“ ist bei gleichem
 Rückgang besser als die Basis; mit 0,5 % Risiko pro Trade (`trend_trail@1d+4h~0.5`) rund
-+52 % pro Jahr bei −36 % max. Rückgang (Basis: +33 % / −29 %). Nachkauf und mehr Coins
-bringen keine echte Verbesserung.
++54 % pro Jahr bei −36 % max. Rückgang (Basis: +33 % / −29 %), mit 10.000 USDT ab 20.07.2020:
+Endstand 152.123, tiefster Stand 9.979, höchster 178.947 USDT (Basis: 60.655 / 9.781 / 69.255).
+Nachkauf und mehr Coins bringen keine echte Verbesserung.
 
 ## Paper Trading
 
