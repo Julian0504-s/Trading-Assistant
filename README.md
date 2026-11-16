@@ -33,6 +33,7 @@ Details und Phasenplan: siehe `CLAUDE.md`.
 ```bash
 uv sync
 cp .env.example .env   # optional: Watchlist / DB-Pfad anpassen
+# Standard-Watchlist: BTC, ETH, SOL, XRP, DOGE, BNB, ADA, LINK, ZEC, AVAX (USDT-Perpetuals)
 ```
 
 ## Kerzen laden

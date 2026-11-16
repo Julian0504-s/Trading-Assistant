@@ -141,6 +141,9 @@ def refresh(db: str, symbols: list[str], timeframes: list[str]) -> tuple[int, li
 
 # ------------------------------------------------------------- Karten-Übersicht
 
+# Auf 1m–5m entstehen sehr viele Signale – in Übersichten standardmäßig ausgeblendet
+SHORT_TIMEFRAMES = ("1m", "3m", "5m")
+
 TREND_GROUPS = (
     ("kurzfristig", ("1m", "3m", "5m")),
     ("mittelfristig", ("15m", "1h")),
@@ -212,7 +215,8 @@ def symbol_cards(
                                "word": trend_word([arrows[tf] for tf in present])})
         interval_h = (fr.funding_interval_h or 8) if fr else 8
         rate = fr.funding_rate if fr else None
-        sig = signals[(signals["Symbol"] == sym) & (signals["Stärke_n"] >= 2)].head(3) \
+        sig = signals[(signals["Symbol"] == sym) & (signals["Stärke_n"] >= 2)
+                      & ~signals["Timeframe"].isin(SHORT_TIMEFRAMES)].head(3) \
             if not signals.empty else signals
         cards.append({
             "symbol": sym,

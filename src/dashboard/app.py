@@ -124,9 +124,10 @@ with tab_overview:
                     st.markdown(f"{sg['Richtung']} · {sg['Timeframe']} · "
                                 f"{sg['Zeit']:%d.%m. %H:%M}  \n:gray[{sg['Begründung']}]")
             else:
-                st.caption("Keine Signale ab Stärke „mittel“.")
+                st.caption("Keine Signale ab Stärke „mittel“ (ab 15m).")
     st.caption("Trend: kurzfristig = 1m/3m/5m, mittelfristig = 15m/1h, langfristig = 4h/1d. "
                "RSI über 70 = überkauft, unter 30 = überverkauft. Funding normal < 0,01 %. "
+               "Signale auf den Karten: ab Stärke „mittel“, ab Timeframe 15m. "
                "Preis und 24h-Änderung live von Bitunix.")
 
 # ----------------------------------------------------------------------------- Chart
