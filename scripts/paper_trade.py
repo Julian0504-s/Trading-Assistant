@@ -122,6 +122,15 @@ async def run(args: argparse.Namespace) -> None:
                                 if needs_sync(candles, sym, tf, now):
                                     await sync_candles(client, candles, sym, tf)
                                     synced = True
+                        # Funding: tatsächlich abgerechnete Raten für Symbole mit offenen Positionen
+                        for sym in sorted(set().union(*(tr.symbols_with_positions()
+                                                        for tr in traders))):
+                            rows = await client.get_funding_history(sym, limit=10)
+                            for tr in traders:
+                                if sym in tr.symbols_with_positions():
+                                    paid = tr.apply_funding(sym, rows, now)
+                                    if paid:
+                                        log.info("%s: Funding %s %+.4f USDT", tr.name, sym, paid)
                         if synced or first:
                             first = False
                             frames = {}

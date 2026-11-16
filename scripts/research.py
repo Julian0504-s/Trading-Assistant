@@ -27,6 +27,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from data.funding import load_schedules
 from data.store import CandleStore
 from indicators import add_all
 from strategy import STRATEGIES, ExitConfig, Strategy
@@ -124,12 +125,14 @@ def main() -> int:
                 continue
             sigs = index_signals(frames, tf)
             start = min(df.index[0] for df in frames.values())
+            funding = load_schedules(args.db, list(frames), int(start.value // 1_000_000), now + DAY)
             print(f"=== {tf} · Entwicklung {start:%d.%m.%Y} – {fmt_d(test_from - 1)} · "
                   f"{len(frames)} Coins")
             t0 = time.time()
             train = []
             for v in vs:
-                r = run_backtest(frames, tf, v, signals=sigs, trade_until=test_from - 1)
+                r = run_backtest(frames, tf, v, signals=sigs, trade_until=test_from - 1,
+                                 funding=funding)
                 train.append((v, r.metrics))
             ranked = sorted(train, key=lambda x: score(x[1]), reverse=True)
             ok = [x for x in ranked if eligible(x[1], tf)]
@@ -149,8 +152,9 @@ def main() -> int:
             for role, v in finalists:
                 tr = next((m for vv, m in train if vv is v), None)
                 if tr is None:
-                    tr = run_backtest(frames, tf, v, signals=sigs, trade_until=test_from - 1).metrics
-                te = run_backtest(frames, tf, v, signals=sigs, trade_from=test_from)
+                    tr = run_backtest(frames, tf, v, signals=sigs, trade_until=test_from - 1,
+                                      funding=funding).metrics
+                te = run_backtest(frames, tf, v, signals=sigs, trade_from=test_from, funding=funding)
                 print(line(f"{role}: {v.label}", te.metrics))
                 step = max(1, len(te.equity) // 400)
                 tf_report["test"].append({

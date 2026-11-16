@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from data.funding import load_schedules
 from data.store import CandleStore
 from indicators import add_all
 from strategy import STRATEGIES, Strategy
@@ -93,16 +94,20 @@ def main() -> int:
     # Gesamtzeitraum: ab dem Zeitpunkt, an dem alle Timeframes handeln können
     full_from = max(min(df.index[200] for df in frames[tf].values()) for tf in tfs)
     full_from = int(full_from.value // 1_000_000)
+    funding = load_schedules(args.db, symbols, full_from - 400 * DAY, now + DAY)
+    estimated_until = max((int(sch.loc[sch["estimated"], "time"].max())
+                           for sch in funding.values() if sch["estimated"].any()), default=None)
 
     def run(name: str, start: int, end: int) -> dict:
         streams = [Stream(sym, tf, frames[tf][sym], strat, sigs[tf].get(sym, {}))
                    for tf, strat in IDEAS[name] for sym in frames[tf]]
-        r = run_streams(streams, trade_from=start, trade_until=end, name=name)
+        r = run_streams(streams, trade_from=start, trade_until=end, name=name, funding=funding)
         step = max(1, len(r.equity) // 400)
         return {"m": r.metrics,
                 "equity": {"x": [t.isoformat() for t in r.equity.index[::step]],
                            "y": [round(float(v), 2) for v in r.equity.values[::step]]}}
 
+    print("Funding: echte Raten ab 03/2024, davor und in Lücken Median-Rate je Coin")
     print(f"{len(symbols)} Coins · Halbjahre: " + ", ".join(f"{fmt(a)}–{fmt(b)}" for a, b in periods)
           + f" · Gesamt ab {fmt(full_from)}\n")
     results = {}
@@ -129,7 +134,7 @@ def main() -> int:
         fm = res["full"]["m"]
         print(f"{name:<44}" + "".join(f"{h['m']['Rendite %']:>+16.1f}%" for h in res["halves"])
               + f"{fm['Rendite %']:>+9.0f}%{fm['Rendite p.a. %']:>+7.1f}%{fm['Max. Drawdown %']:>7.1f}%"
-              f"{fm['Trades']:>8}  {verdict}")
+              f"{fm['Trades']:>8}  {verdict}  (Funding {fm['Funding']:+.0f} USDT)")
         report["ideas"].append({
             "name": name, "verdict": verdict, "better": better, "wins": wins,
             "halves": [clean(h["m"]) for h in res["halves"]], "full": clean(fm),

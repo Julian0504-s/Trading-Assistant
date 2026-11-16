@@ -47,6 +47,7 @@ class BacktestResult:
     trades: list[Trade]
     orders: list[Order]
     equity: pd.Series            # Kontostand (zu bekannten Schlusskursen) im Handelsfenster
+    funding: float = 0.0         # gezahltes Funding (+) bzw. erhaltenes (−) in USDT
     metrics: dict = field(default_factory=dict)
 
 
@@ -104,8 +105,11 @@ def run_streams(
     trade_until: int | None = None,
     name: str = "",
     timeframe_label: str = "",
+    funding: dict[str, pd.DataFrame] | None = None,
 ) -> BacktestResult:
-    """Mehrere Streams (Symbol × Timeframe × Strategie) in einem gemeinsamen Konto."""
+    """Mehrere Streams (Symbol × Timeframe × Strategie) in einem gemeinsamen Konto.
+    `funding`: je Symbol eine Tabelle (time, rate, mark) – siehe data.funding.funding_schedule.
+    Ohne `funding` wird kein Funding abgerechnet."""
     acc = SimAccount(start_equity, mode="backtest", risk=RiskManager(risk or RiskConfig()))
     arrs = [_Arrays(s.df) for s in streams]
     steps = [INTERVAL_MS[s.timeframe] for s in streams]
@@ -121,7 +125,9 @@ def run_streams(
     if trade_until is None:
         trade_until = max((int(a.t[-1]) for a in arrs if len(a.t)), default=0)
 
-    # Ereignisse: (Zeit, Art 0=Schluss/1=Eröffnung, Stream, Index). Schluss vor Eröffnung.
+    # Ereignisse: (Zeit, Art, Stream, Index). Art 0 = Kerzenschluss, 1 = Funding,
+    # 2 = Eröffnung – zum selben Zeitpunkt in dieser Reihenfolge: Eine Position zahlt
+    # Funding, wenn sie zur Abrechnung offen ist; neu eröffnete zahlen erst ab der nächsten.
     events: list[tuple[int, int, int, int]] = []
     for k, a in enumerate(arrs):
         if trade_from is None:
@@ -129,8 +135,19 @@ def run_streams(
         first = max(int(np.searchsorted(a.t, trade_from)), warmup)
         last = int(np.searchsorted(a.t, trade_until, side="right"))
         for i in range(first, last):
-            events.append((int(a.t[i]), 1, k, i))
+            events.append((int(a.t[i]), 2, k, i))
             events.append((int(a.t[i]) + steps[k], 0, k, i))
+    fund_syms: list[tuple[str, np.ndarray, np.ndarray, np.ndarray]] = []
+    if funding and trade_from is not None:
+        for sym in sorted({s.symbol for s in streams}):
+            sch = funding.get(sym)
+            if sch is None or sch.empty:
+                continue
+            sch = sch[(sch["time"] > trade_from) & (sch["time"] <= trade_until + max(steps))]
+            j = len(fund_syms)
+            fund_syms.append((sym, sch["time"].to_numpy(), sch["rate"].to_numpy(),
+                              sch["mark"].to_numpy(dtype="float64")))
+            events.extend((int(t), 1, j, n) for n, t in enumerate(fund_syms[j][1]))
     heapq.heapify(events)
 
     pending: dict[int, list[tuple[str, Signal | None, float]]] = defaultdict(list)
@@ -141,9 +158,16 @@ def run_streams(
 
     while events:
         t, kind, k, i = heapq.heappop(events)
+        if kind == 1:  # ---- FUNDING
+            sym, _, rates, marks = fund_syms[k]
+            if any(p.symbol == sym for p in acc.positions.values()):
+                mark = marks[i] if not math.isnan(marks[i]) else last_close.get(sym)
+                if mark:
+                    acc.apply_funding(sym, float(rates[i]), float(mark), t)
+            continue
         s, a, strat = streams[k], arrs[k], streams[k].strategy
         key = (s.symbol, s.timeframe)
-        if kind == 1:  # ---- ERÖFFNUNG
+        if kind == 2:  # ---- ERÖFFNUNG
             for action, sig, atr in pending.pop(k, []):
                 o = a.o[i]
                 pos = acc.positions.get(key)
@@ -196,7 +220,7 @@ def run_streams(
         timeframe=timeframe_label or "+".join(sorted({s.timeframe for s in streams})),
         symbols=sorted({s.symbol for s in streams}),
         start=trade_from or 0, end=end_t, start_equity=start_equity, end_equity=acc.cash,
-        trades=acc.trades, orders=acc.orders, equity=equity,
+        trades=acc.trades, orders=acc.orders, equity=equity, funding=-acc.funding_total,
     )
     result.metrics = compute_metrics(result)
     return result
@@ -213,6 +237,7 @@ def run_backtest(
     signals: SignalIndex | None = None,
     trade_from: int | None = None,
     trade_until: int | None = None,
+    funding: dict[str, pd.DataFrame] | None = None,
 ) -> BacktestResult:
     """Eine Strategie auf einem Timeframe über mehrere Symbole.
     `frames`: pro Symbol ein DataFrame mit Indikatoren (indicators.add_all).
@@ -221,7 +246,7 @@ def run_backtest(
     streams = [Stream(sym, timeframe, df, strategy, sig_at.get(sym, {}))
                for sym, df in frames.items()]
     return run_streams(streams, start_equity=start_equity, risk=risk, warmup=warmup,
-                       trade_from=trade_from, trade_until=trade_until)
+                       trade_from=trade_from, trade_until=trade_until, funding=funding)
 
 
 def compute_metrics(r: BacktestResult) -> dict:
@@ -251,6 +276,7 @@ def compute_metrics(r: BacktestResult) -> dict:
         "Profitfaktor": gross_win / gross_loss if gross_loss > 0 else math.inf if gross_win else math.nan,
         "Ø R pro Trade": sum(t.r_multiple for t in trades) / len(trades) if trades else math.nan,
         "Gebühren": sum(t.fees for t in trades),
+        "Funding": r.funding,
         "Tage": days,
         "Wochen im Plus %": 100 * (weekly > 0).mean() if len(weekly) else math.nan,
         "Beste Woche %": weekly.max() if len(weekly) else math.nan,

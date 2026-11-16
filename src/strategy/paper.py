@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS paper_accounts (
 CREATE TABLE IF NOT EXISTS paper_positions (
     account TEXT NOT NULL, id INTEGER NOT NULL, symbol TEXT, timeframe TEXT, strategy TEXT,
     direction TEXT, entry_time INTEGER, entry_price REAL, qty REAL, stop REAL, target REAL,
-    reason TEXT, entry_fee REAL, trail_atr REAL, initial_stop REAL,
+    reason TEXT, entry_fee REAL, trail_atr REAL, initial_stop REAL, funding REAL DEFAULT 0,
     PRIMARY KEY (account, id)
 );
 CREATE TABLE IF NOT EXISTS paper_orders (
@@ -69,9 +69,10 @@ class PaperStore:
         self.conn.executescript(_SCHEMA)
         # Ältere Datenbanken um neue Spalten ergänzen
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(paper_positions)")}
-        for col in ("trail_atr", "initial_stop"):
+        for col in ("trail_atr", "initial_stop", "funding"):
             if col not in cols:
-                self.conn.execute(f"ALTER TABLE paper_positions ADD COLUMN {col} REAL")
+                self.conn.execute(f"ALTER TABLE paper_positions ADD COLUMN {col} REAL"
+                                  + (" DEFAULT 0" if col == "funding" else ""))
 
     def close(self) -> None:
         self.conn.close()
@@ -93,8 +94,8 @@ class PaperStore:
         acc = SimAccount(start, mode="paper", cash=cash, next_id=next_id)
         for r in self.conn.execute(
                 "SELECT id, symbol, timeframe, strategy, direction, entry_time, entry_price, qty,"
-                " stop, target, reason, entry_fee, trail_atr, initial_stop FROM paper_positions"
-                " WHERE account=?", (name,)):
+                " stop, target, reason, entry_fee, trail_atr, initial_stop, COALESCE(funding, 0)"
+                " FROM paper_positions WHERE account=?", (name,)):
             pos = Position(*r)
             acc.positions[(pos.symbol, pos.timeframe)] = pos
         return acc, json.loads(progress)
@@ -118,10 +119,10 @@ class PaperStore:
             self.conn.executemany(
                 "INSERT INTO paper_positions (account, id, symbol, timeframe, strategy, direction,"
                 " entry_time, entry_price, qty, stop, target, reason, entry_fee, trail_atr,"
-                " initial_stop) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " initial_stop, funding) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [(name, p.id, p.symbol, p.timeframe, p.strategy, p.direction, p.entry_time,
                   p.entry_price, p.qty, p.stop, p.target, p.reason, p.entry_fee, p.trail_atr,
-                  p.initial_stop)
+                  p.initial_stop, p.funding)
                  for p in acc.positions.values()])
             self.conn.executemany(
                 "INSERT INTO paper_orders VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -231,6 +232,27 @@ class PaperTrader:
         self.store.save(self.name, self.acc, self.progress, self.acc.orders[n_orders:], closed,
                         now, self.acc.equity(prices))
         return StepResult(opened, closed)
+
+    def symbols_with_positions(self) -> set[str]:
+        return {p.symbol for p in self.acc.positions.values()}
+
+    def apply_funding(self, symbol: str, rows: list[tuple[int, float, float]], now: int) -> float:
+        """Rechnet tatsächlich abgerechnete Funding-Raten ab (Zeit, Rate, Mark-Preis).
+        Jede Abrechnung nur einmal, nur für Positionen, die zu dem Zeitpunkt offen waren."""
+        key = f"funding|{symbol}"
+        n_orders = len(self.acc.orders)
+        total = 0.0
+        last = self.progress.get(key, 0)
+        for t, rate, mark in sorted(rows):
+            if t <= last:
+                continue
+            total += self.acc.apply_funding(symbol, rate, mark, t, opened_before=t)
+            last = t
+        self.progress[key] = last
+        if len(self.acc.orders) > n_orders or last:
+            self.store.save(self.name, self.acc, self.progress, self.acc.orders[n_orders:], [],
+                            now, self.acc.equity())
+        return total
 
     def close_all(self, prices: dict[str, float], now: int, reason: str) -> list[Trade]:
         n_orders, n_trades = len(self.acc.orders), len(self.acc.trades)

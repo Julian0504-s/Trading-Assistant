@@ -143,3 +143,22 @@ def test_paper_konto_mit_zwei_timeframes(tmp_path, signals_at):
         # beide Timeframes eröffnen je eine eigene Position im selben Konto
         assert sorted(p.timeframe for p in res.opened) == ["1d", "4h"]
         assert len(tr.acc.positions) == 2
+
+
+def test_paper_funding_nur_fuer_offene_positionen_und_einmalig(tmp_path, signals_at):
+    db = tmp_path / "p.db"
+    with PaperStore(db) as ps:
+        tr = PaperTrader(ps, "trend@1h", STRATEGIES["trend"], ["1h"], now=0)
+        tr.step({("BTC", "1h"): frame(10)}, {"BTC": 100.0}, now=10 * H)
+        signals_at[10 * H] = "long"
+        (pos,) = tr.step({("BTC", "1h"): frame(11)}, {"BTC": 100.0}, now=11 * H).opened
+        rows = [(8 * H, 0.001, 100.0),          # vor dem Einstieg -> nicht abrechnen
+                (16 * H, 0.001, 100.0)]         # danach -> Long zahlt
+        paid = tr.apply_funding("BTC", rows, now=16 * H)
+        assert paid == pytest.approx(-0.001 * 100 * pos.qty)
+        assert tr.apply_funding("BTC", rows, now=17 * H) == 0      # nicht doppelt
+    with PaperStore(db) as ps:                                      # nach Neustart
+        tr2 = PaperTrader(ps, "trend@1h", STRATEGIES["trend"], ["1h"])
+        assert tr2.acc.positions[("BTC", "1h")].funding == pytest.approx(paid)
+        assert tr2.apply_funding("BTC", rows, now=18 * H) == 0
+        assert any(o.action == "Funding" for o in ps.orders("trend@1h"))

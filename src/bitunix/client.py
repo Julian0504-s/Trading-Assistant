@@ -289,3 +289,20 @@ class BitunixPublicClient:
         """Aktuelle Funding Rates aller Kontrakte (Batch-Endpunkt)."""
         data = await self._get("funding_rate/batch")
         return [FundingRate.from_api(d) for d in data or []]
+
+    async def get_funding_history(
+        self, symbol: str, *, end_time: int | None = None, limit: int = 200
+    ) -> list[tuple[int, float, float]]:
+        """Abgerechnete Funding-Raten (neueste zuerst laut API), aufsteigend sortiert.
+
+        Gibt (Abrechnungszeit ms, Rate als BRUCH, Mark-Preis) zurück. Achtung: Dieser
+        Endpunkt liefert Brüche (z. B. 0.0001 = 0,01 %), der Endpunkt für die
+        aktuelle Rate dagegen Prozent – live geprüft, siehe models.FundingRate.
+        Bei Bitunix reicht die Historie etwa bis März 2024 zurück.
+        """
+        data = await self._get("get_funding_rate_history",
+                               {"symbol": symbol, "limit": limit, "endTime": end_time})
+        rows = [(int(d["fundingTime"]), float(d["fundingRate"]), float(d.get("markPrice") or 0))
+                for d in data or []]
+        rows.sort()
+        return rows

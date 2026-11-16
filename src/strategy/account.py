@@ -34,6 +34,7 @@ class Position:
     entry_fee: float
     trail_atr: float | None = None   # Trailing-Stop-Abstand in ATR (None = aus)
     initial_stop: float | None = None
+    funding: float = 0.0              # erhaltenes (+) / gezahltes (−) Funding in USDT
     units: int = 1                    # 1 + Anzahl Nachkäufe
     risk_amount: float | None = None  # ursprünglich eingesetztes Risiko in USDT (für R)
     last_add_price: float | None = None
@@ -118,6 +119,7 @@ class SimAccount:
     orders: list[Order] = field(default_factory=list)
     trades: list[Trade] = field(default_factory=list)
     next_id: int = 1
+    funding_total: float = 0.0        # Summe erhaltenes (+) / gezahltes (−) Funding
 
     def __post_init__(self) -> None:
         if self.cash == 0.0:
@@ -167,7 +169,7 @@ class SimAccount:
         fill = price * (1 - self.slippage if pos.direction == "long" else 1 + self.slippage)
         fee = pos.qty * fill * self.fee_rate
         gross = pos.unrealized(fill)
-        pnl = gross - fee - pos.entry_fee
+        pnl = gross - fee - pos.entry_fee + pos.funding
         self.cash += gross - fee
         del self.positions[(pos.symbol, pos.timeframe)]
         risk = pos.risk_amount
@@ -178,6 +180,29 @@ class SimAccount:
         self._log(pos, time, "Schließung", "Verkauf" if pos.direction == "long" else "Kauf",
                   fill, fee, pnl, reason)
         return trade
+
+    def apply_funding(self, symbol: str, rate: float, mark: float, time: int,
+                      opened_before: int | None = None) -> float:
+        """Funding-Abrechnung für alle offenen Positionen eines Symbols.
+        Positive Rate: Long zahlt, Short bekommt (negative Rate umgekehrt).
+        Gibt die Summe (+ erhalten / − gezahlt) zurück."""
+        total = 0.0
+        for pos in self.positions.values():
+            if pos.symbol != symbol:
+                continue
+            if opened_before is not None and pos.entry_time >= opened_before:
+                continue  # zur Abrechnung noch nicht offen
+            sign = 1 if pos.direction == "long" else -1
+            amount = -sign * rate * pos.qty * mark
+            pos.funding += amount
+            total += amount
+            self.orders.append(Order(time, self.mode, pos.strategy, pos.symbol, pos.timeframe,
+                                     "Funding", "erhalten" if amount >= 0 else "gezahlt", mark,
+                                     pos.qty, pos.qty * mark, 0.0, amount,
+                                     f"Funding-Rate {rate * 100:+.4f} %", pos.id))
+        self.cash += total
+        self.funding_total += total
+        return total
 
     def add_to(self, pos: Position, price: float, time: int, reason: str,
                prices: dict[str, float] | None = None) -> bool:

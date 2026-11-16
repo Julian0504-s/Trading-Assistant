@@ -22,6 +22,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from data.funding import load_schedules
 from data.store import CandleStore
 from indicators import add_all
 from risk import RiskConfig
@@ -87,9 +88,12 @@ def main() -> int:
             if not frames:
                 print(f"{'':<16}{tf:>4}  zu wenig Kerzen – erst fetch_candles.py --history")
                 continue
+            first = min(int(df.index[0].value // 1_000_000) for df in frames.values())
+            last = max(int(df.index[-1].value // 1_000_000) for df in frames.values())
+            funding = load_schedules(args.db, list(frames), first, last + 86_400_000)
             for name in names:
                 res = run_backtest(frames, tf, STRATEGIES[name], start_equity=args.capital,
-                                   risk=risk)
+                                   risk=risk, funding=funding)
                 m = res.metrics
                 period = f"{m['Tage']:.0f} Tage"
                 print(f"{STRATEGIES[name].label:<16}{tf:>4}{period:>11}{m['Trades']:>8}"
