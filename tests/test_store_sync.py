@@ -70,3 +70,15 @@ def test_sync_backfill_dann_inkrementell():
     # inkrementell: letzte gespeicherte Kerze + 2 neue, nur eine Seite nötig
     assert r2.fetched == 3 and r2.total == 302 and r2.latest_open_time == 1002 * H
     assert ends2 == [None]
+
+
+def test_load_df_fuer_indikatoren():
+    with CandleStore(":memory:") as s:
+        s.upsert("BTCUSDT", "1h", [k(2 * H, close=101.0), k(H)])
+        df = s.load_df("BTCUSDT", "1h")
+        assert list(df.columns) == ["open", "high", "low", "close", "volume", "quote_volume"]
+        assert str(df.index.tz) == "UTC"
+        assert df.index[0].value // 1_000_000 == H  # ns -> ms
+        assert df["close"].tolist() == [100.0, 101.0]
+        assert df["volume"].tolist() == [10.0, 10.0]
+        assert s.load_df("BTCUSDT", "4h").empty

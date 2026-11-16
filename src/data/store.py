@@ -6,6 +6,8 @@ import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
+import pandas as pd
+
 from bitunix.models import Kline
 
 _SCHEMA = """
@@ -90,3 +92,25 @@ class CandleStore:
             params += (limit,)
         rows = self._conn.execute(sql, params).fetchall()
         return [Kline(*r) for r in reversed(rows)]
+
+    def load_df(self, symbol: str, interval: str, limit: int | None = None) -> pd.DataFrame:
+        """Kerzen als DataFrame für die Indikatoren.
+
+        Index: Eröffnungszeit (UTC, tz-aware). Spalten: open, high, low, close,
+        volume (Basis-Coin), quote_volume (USDT).
+        """
+        klines = self.load(symbol, interval, limit)
+        df = pd.DataFrame(
+            {
+                "open": [k.open for k in klines],
+                "high": [k.high for k in klines],
+                "low": [k.low for k in klines],
+                "close": [k.close for k in klines],
+                "volume": [k.base_vol for k in klines],
+                "quote_volume": [k.quote_vol for k in klines],
+            },
+            index=pd.to_datetime([k.open_time for k in klines], unit="ms", utc=True),
+            dtype="float64",
+        )
+        df.index.name = "open_time"
+        return df
