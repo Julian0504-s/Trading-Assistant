@@ -34,10 +34,23 @@ class Position:
     entry_fee: float
     trail_atr: float | None = None   # Trailing-Stop-Abstand in ATR (None = aus)
     initial_stop: float | None = None
+    units: int = 1                    # 1 + Anzahl Nachkäufe
+    risk_amount: float | None = None  # ursprünglich eingesetztes Risiko in USDT (für R)
+    last_add_price: float | None = None
 
     def __post_init__(self) -> None:
         if self.initial_stop is None:
             self.initial_stop = self.stop
+        if self.risk_amount is None:
+            self.risk_amount = abs(self.entry_price - self.initial_stop) * self.qty
+        if self.last_add_price is None:
+            self.last_add_price = self.entry_price
+
+    def risk_free(self) -> bool:
+        """True, wenn der Stop mindestens beim Ø-Einstieg liegt (kein Verlustrisiko mehr)."""
+        if self.direction == "long":
+            return self.stop >= self.entry_price
+        return self.stop <= self.entry_price
 
     @property
     def notional(self) -> float:
@@ -157,7 +170,7 @@ class SimAccount:
         pnl = gross - fee - pos.entry_fee
         self.cash += gross - fee
         del self.positions[(pos.symbol, pos.timeframe)]
-        risk = abs(pos.entry_price - pos.initial_stop) * pos.qty
+        risk = pos.risk_amount
         trade = Trade(pos.id, pos.symbol, pos.timeframe, pos.strategy, pos.direction,
                       pos.entry_time, time, pos.entry_price, fill, pos.qty, pnl,
                       fee + pos.entry_fee, pnl / risk if risk else 0.0, pos.reason, reason)
@@ -165,6 +178,37 @@ class SimAccount:
         self._log(pos, time, "Schließung", "Verkauf" if pos.direction == "long" else "Kauf",
                   fill, fee, pnl, reason)
         return trade
+
+    def add_to(self, pos: Position, price: float, time: int, reason: str,
+               prices: dict[str, float] | None = None) -> bool:
+        """Nachkauf (Pyramiding): nur wenn die bestehende Position durch den Stop bereits
+        ohne Verlustrisiko ist. Der Nachkauf riskiert bis zum aktuellen Stop höchstens
+        `risk_per_trade` – das offene Risiko der Position bleibt so <= 1 %."""
+        fill = price * (1 + self.slippage if pos.direction == "long" else 1 - self.slippage)
+        if not pos.risk_free():
+            return False
+        sign = 1 if pos.direction == "long" else -1
+        if sign * (fill - pos.stop) <= 0:
+            return False
+        equity = self.equity(prices)
+        if self.risk.daily_limit_hit(time, equity):
+            return False
+        try:
+            qty = self.risk.size_position(equity, fill, pos.stop, self.open_notional())
+        except RiskViolation:
+            return False
+        fee = qty * fill * self.fee_rate
+        self.cash -= fee
+        pos.entry_price = (pos.entry_price * pos.qty + fill * qty) / (pos.qty + qty)
+        pos.qty += qty
+        pos.entry_fee += fee
+        pos.units += 1
+        pos.last_add_price = fill
+        pos.risk_amount += abs(fill - pos.stop) * qty
+        self.orders.append(Order(time, self.mode, pos.strategy, pos.symbol, pos.timeframe,
+                                 "Aufstockung", "Kauf" if pos.direction == "long" else "Verkauf",
+                                 fill, qty, qty * fill, fee, None, reason, pos.id))
+        return True
 
     def check_exit(self, pos: Position, o: float, h: float, low: float, time: int,
                    atr: float | None = None) -> Trade | None:

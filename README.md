@@ -169,11 +169,28 @@ Stand 16.11.2026: Nur auf 1d hat eine Variante die Prüfung bestanden
 (`trend_trail`: Trendfolge mit Stop 3 ATR und Trailing-Stop 4 ATR, Prüfjahr +27 %,
 max. Drawdown −12,5 %). 1h und 4h sind in der Prüfung durchgefallen.
 
+## Ideen-Vergleich über Halbjahre (Walk-forward)
+
+```bash
+uv run python scripts/walkforward.py
+```
+
+Vergleicht vorab festgelegte Ideen mit der Basis `trend_trail@1d` – in jedem der letzten
+4 Halbjahre (frisches Konto) und über den Gesamtzeitraum: nur Long, BTC-Filter (Long nur
+bei BTC über EMA 200), Nachkauf bei Gewinnern (nur wenn die Position durch den Stop schon
+ohne Verlustrisiko ist), 1d + 4h in einem Konto. Regel: besser in ≥ 3 von 4 Halbjahren
+und Verhältnis Jahresrendite / Drawdown mindestens so gut wie die Basis.
+
+Stand 16.11.2026: Nur „1d + 4h in einem Konto“ erfüllt die Regel (+100 % p.a. statt
++41 %, aber max. Drawdown −55 % statt −28 %). Der Mehrertrag kommt größtenteils von
+mehr Risiko (mehr gleichzeitige Positionen).
+
 ## Paper Trading
 
 ```bash
 uv run python scripts/paper_trade.py                       # läuft dauerhaft (PAPER_RUNS)
-uv run python scripts/paper_trade.py --runs trend@4h,trend@1d
+uv run python scripts/paper_trade.py --runs trend_trail@1d,trend_trail@1d+4h
+# "1d+4h" = beide Timeframes in EINEM gemeinsamen Konto
 uv run python scripts/paper_trade.py --status              # Kontostände
 uv run python scripts/paper_trade.py --export orders.csv   # Order-Log (CSV, für die Steuer)
 ```

@@ -172,11 +172,11 @@ def test_backtest_einstieg_naechste_kerze_und_ziel(monkeypatch):
     (trade,) = res.trades
     assert trade.entry_time == 211 * H
     assert trade.entry_price == pytest.approx(101 * 1.0002)          # Slippage
-    assert trade.exit_reason == "Kursziel" and trade.exit_time == 213 * H
+    assert trade.exit_reason == "Kursziel" and trade.exit_time == 214 * H   # Schluss von Kerze 213
     assert trade.r_multiple == pytest.approx(2.0, abs=0.1)            # Chance-Risiko 1:2
     assert res.metrics["Trades"] == 1 and res.metrics["Trefferquote %"] == 100
     assert res.end_equity == pytest.approx(1000 + trade.pnl)
-    assert len(res.equity) == len(df) - 200   # Kontoverlauf erst nach der Aufwärmphase
+    assert len(res.equity) == len(df) - 200   # ein Punkt je Kerzenschluss nach der Aufwärmphase
 
 
 def test_backtest_kein_blick_in_die_zukunft(monkeypatch):
@@ -262,7 +262,7 @@ def test_backtest_zeitfenster(monkeypatch):
                        trade_until=399 * H)
     # Signal bei 220 liegt vor dem Fenster und wird ignoriert, 330 wird gehandelt
     assert [t.entry_time for t in res.trades] == [331 * H]
-    assert res.equity.index[0] == pd.Timestamp(300 * H, unit="ms", tz="UTC")
+    assert res.equity.index[0] == pd.Timestamp(301 * H, unit="ms", tz="UTC")  # erster Schluss
     assert "Wochen im Plus %" in res.metrics
 
 
@@ -271,3 +271,97 @@ def test_trend_trail_strategie():
     assert s.exits.trail_atr == 4 and s.exits.target_atr is None
     stop, target = s.stop_and_target("long", 100, 2)
     assert stop == 94 and target == math.inf
+
+
+
+# ---------------------------------------------- Ideen: Long-only, BTC-Filter, Nachkauf
+
+def test_long_only_und_btc_filter():
+    from strategy import Strategy
+
+    s = Strategy("x", "x", "x", frozenset({"ema_cross"}), long_only=True)
+    assert s.pick([sig(direction="short")], row(ema200=110)) is None
+    b = Strategy("x", "x", "x", frozenset({"ema_cross"}), btc_filter=True)
+    r = pd.Series({"close": 100.0, "ema_200": 90.0, "btc_up": True})
+    assert b.pick([sig()], r) is not None
+    assert b.pick([sig(direction="short")], r) is None
+    r["btc_up"] = False
+    assert b.pick([sig()], r) is None and b.pick([sig(direction="short")], r) is not None
+    r["btc_up"] = None
+    assert b.pick([sig()], r) is None
+
+
+def test_btc_regime_spalte():
+    from strategy.regime import add_btc_regime
+
+    idx = pd.to_datetime([0, H, 2 * H], unit="ms", utc=True)
+    btc = pd.DataFrame({"close": [100, 120, 80], "ema_200": [np.nan, 110, 110]}, index=idx)
+    eth = pd.DataFrame({"close": [1, 2, 3]}, index=idx)
+    out = add_btc_regime({"BTCUSDT": btc, "ETHUSDT": eth})
+    assert out["ETHUSDT"]["btc_up"].tolist()[1:] == [True, False]
+    assert pd.isna(out["ETHUSDT"]["btc_up"].iloc[0])
+    assert "btc_up" not in eth  # Original unverändert
+
+
+def test_nachkauf_nur_ohne_verlustrisiko():
+    acc = account()
+    pos = acc.open(symbol="BTC", timeframe="1d", strategy="t", direction="long", price=100,
+                   time=0, stop=94, target=math.inf, reason="x", trail_atr=4)
+    assert not acc.add_to(pos, 104, H, "x")                 # Stop noch unter Einstieg
+    acc.check_exit(pos, 110, 115, 109, H, atr=2)             # Trailing: 115 - 8 = 107
+    assert pos.stop == 107 and pos.risk_free()
+    risk_before = pos.risk_amount
+    assert acc.add_to(pos, 112, 2 * H, "Nachkauf")
+    # neuer Teil riskiert 1 % des Kontos bis zum Stop 107 -> ~10 USDT
+    assert pos.risk_amount - risk_before == pytest.approx(0.01 * acc.equity(), rel=0.02)
+    assert pos.units == 2 and 100 < pos.entry_price < 112
+    assert [o.action for o in acc.orders] == ["Eröffnung", "Aufstockung"]
+
+
+def test_backtest_mit_nachkauf(monkeypatch):
+    from strategy import ExitConfig, Strategy
+
+    df = frame(300)
+    # stetiger Anstieg ab Kerze 211: +1 je Kerze
+    for i in range(211, 300):
+        for c in ("open", "high", "low", "close"):
+            df.iloc[i, df.columns.get_loc(c)] = 100 + (i - 210) + {"open": 0, "high": 0.5,
+                                                                    "low": -0.5, "close": 0.5}[c]
+    signal = Signal("BTC", "1h", "ema_cross", "long", 2, "x", 100.0, 210 * H)
+    monkeypatch.setattr(bt_module, "evaluate_candles", lambda d, s, tf: [signal])
+    strat = Strategy("p", "p", "p", frozenset({"ema_cross"}), with_trend_only=True,
+                     exits=ExitConfig(stop_atr=3, target_atr=None, trail_atr=4),
+                     pyramid_max=2, pyramid_step_atr=2)
+    res = run_backtest({"BTC": df}, "1h", strat)
+    adds = [o for o in res.orders if o.action == "Aufstockung"]
+    assert len(adds) == 2                                     # höchstens pyramid_max
+    (trade,) = res.trades
+    assert trade.pnl > 0
+
+
+def test_kombiniertes_konto_kennt_tagesschluss_erst_am_tagesende(monkeypatch):
+    from strategy import STRATEGIES
+    from strategy.backtest import Stream, run_streams
+
+    D = 24 * H
+    n_days = 230
+    idx_d = pd.to_datetime([i * D for i in range(n_days)], unit="ms", utc=True)
+    daily = pd.DataFrame({"open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0,
+                          "atr_14": 2.0, "ema_200": 90.0}, index=idx_d)
+    daily.iloc[221, daily.columns.get_loc("close")] = 200.0   # Tag 221 schließt bei 200
+    daily.iloc[221, daily.columns.get_loc("high")] = 200.0
+    four = 4 * H
+    idx_4 = pd.to_datetime([i * four for i in range(n_days * 6)], unit="ms", utc=True)
+    h4 = pd.DataFrame({"open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0,
+                       "atr_14": 1.0, "ema_200": 90.0}, index=idx_4)
+    last4 = 221 * 6 + 5                                       # letzte 4h-Kerze von Tag 221
+    h4.iloc[last4, h4.columns.get_loc("close")] = 200.0      # konsistent mit dem Tagesschluss
+    h4.iloc[last4, h4.columns.get_loc("high")] = 200.0
+    sig_d = {220 * D: [Signal("BTC", "1d", "ema_cross", "long", 2, "x", 100.0, 220 * D)]}
+    res = run_streams([Stream("BTC", "1d", daily, STRATEGIES["trend_trail"], sig_d),
+                       Stream("BTC", "4h", h4, STRATEGIES["trend_trail"], {})])
+    eq = res.equity
+    during = eq[(eq.index > pd.Timestamp(221 * D, unit="ms", tz="UTC"))
+                & (eq.index < pd.Timestamp(222 * D, unit="ms", tz="UTC"))]
+    assert len(during) == 5 and (during < 1001).all()        # tagsüber: Kurs 100 bekannt
+    assert eq[pd.Timestamp(222 * D, unit="ms", tz="UTC")] > 1050   # erst am Tagesende: 200

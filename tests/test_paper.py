@@ -109,3 +109,37 @@ def test_alte_datenbank_wird_ergaenzt(tmp_path):
     with PaperStore(db) as ps:
         cols = {r[1] for r in ps.conn.execute("PRAGMA table_info(paper_positions)")}
         assert {"trail_atr", "initial_stop"} <= cols
+
+
+def test_paper_lehnt_nachkauf_ab(tmp_path):
+    from strategy import ExitConfig, Strategy
+
+    s = Strategy("p", "p", "p", frozenset({"ema_cross"}), pyramid_max=1,
+                 exits=ExitConfig(target_atr=None, trail_atr=4))
+    with PaperStore(tmp_path / "p.db") as ps:
+        with pytest.raises(ValueError):
+            PaperTrader(ps, "p@1d", s, ["1d"])
+
+
+def test_parse_runs_mehrere_timeframes():
+    from paper_trade import parse_runs
+
+    assert parse_runs("trend_trail@1d,trend_trail@1d+4h") == [
+        ("trend_trail", ["1d"]), ("trend_trail", ["1d", "4h"])]
+    with pytest.raises(SystemExit):
+        parse_runs("trend_trail@7x")
+    with pytest.raises(SystemExit):
+        parse_runs("gibtsnicht@1d")
+
+
+def test_paper_konto_mit_zwei_timeframes(tmp_path, signals_at):
+    with PaperStore(tmp_path / "p.db") as ps:
+        tr = PaperTrader(ps, "trend_trail@1d+4h", STRATEGIES["trend_trail"], ["1d", "4h"])
+        frames = {("BTC", "1d"): frame(10), ("BTC", "4h"): frame(10)}
+        tr.step(frames, {"BTC": 100.0}, now=10 * H)
+        signals_at[10 * H] = "long"
+        res = tr.step({("BTC", "1d"): frame(11), ("BTC", "4h"): frame(11)}, {"BTC": 100.0},
+                      now=11 * H)
+        # beide Timeframes eröffnen je eine eigene Position im selben Konto
+        assert sorted(p.timeframe for p in res.opened) == ["1d", "4h"]
+        assert len(tr.acc.positions) == 2

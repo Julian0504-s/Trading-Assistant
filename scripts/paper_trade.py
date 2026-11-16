@@ -28,7 +28,7 @@ import sys
 import time
 
 from alerts import TelegramError
-from bitunix.client import BitunixError, BitunixPublicClient
+from bitunix.client import INTERVAL_MS, BitunixError, BitunixPublicClient
 from data.store import CandleStore
 from data.sync import needs_sync, sync_candles
 from indicators import add_all
@@ -36,6 +36,7 @@ from risk import RiskConfig, kill_switch_active
 from signals.rules import fmt_price
 from strategy import STRATEGIES, export_orders_csv
 from strategy.paper import PaperStore, PaperTrader
+from strategy.regime import add_btc_regime
 
 from common import (
     DEFAULT_DB_PATH,
@@ -48,18 +49,21 @@ from common import (
 
 log = logging.getLogger("paper")
 
-DEFAULT_RUNS = "trend_trail@1d,trend@1d"
+DEFAULT_RUNS = "trend_trail@1d,trend_trail@1d+4h,trend@1d"
 WINDOW = 400  # Kerzen pro Auswertung (EMA 200 braucht Vorlauf)
 
 
-def parse_runs(value: str) -> list[tuple[str, str]]:
+def parse_runs(value: str) -> list[tuple[str, list[str]]]:
+    """'trend_trail@1d,trend_trail@1d+4h' -> [(trend_trail, [1d]), (trend_trail, [1d, 4h])].
+    Mehrere Timeframes mit '+' laufen in EINEM gemeinsamen Konto."""
     runs = []
     for item in split_list(value):
         name, _, tf = item.partition("@")
-        if name not in STRATEGIES or not tf:
-            raise SystemExit(f"Ungültiger Eintrag {item!r} – Format strategie@timeframe, "
-                             f"Strategien: {', '.join(STRATEGIES)}")
-        runs.append((name, tf))
+        tfs = [t for t in tf.split("+") if t]
+        if name not in STRATEGIES or not tfs or any(t not in INTERVAL_MS for t in tfs):
+            raise SystemExit(f"Ungültiger Eintrag {item!r} – Format strategie@timeframe oder "
+                             f"strategie@1d+4h, Strategien: {', '.join(STRATEGIES)}")
+        runs.append((name, tfs))
     return runs
 
 
@@ -69,29 +73,29 @@ def print_status(db: str) -> None:
         if accounts.empty:
             print("Noch keine Paper-Konten.")
             return
-        print(f"{'Konto':<14}{'Kapital':>11}{'Rendite':>9}{'Trades':>8}{'Treffer':>9}{'offen':>7}")
+        print(f"{'Konto':<20}{'Kapital':>11}{'Rendite':>9}{'Trades':>8}{'Treffer':>9}{'offen':>7}")
         for _, a in accounts.iterrows():
             trades = ps.trades(a["name"])
             eq = ps.equity(a["name"])
             last = eq.iloc[-1] if len(eq) else a["cash"]
             wins = (trades["pnl"] > 0).sum() if len(trades) else 0
             hit = f"{100 * wins / len(trades):.0f}%" if len(trades) else "–"
-            print(f"{a['name']:<14}{last:>11.2f}{(last / a['start_equity'] - 1) * 100:>+8.2f}%"
+            print(f"{a['name']:<20}{last:>11.2f}{(last / a['start_equity'] - 1) * 100:>+8.2f}%"
                   f"{len(trades):>8}{hit:>9}{len(ps.positions(a['name'])):>7}")
 
 
 async def run(args: argparse.Namespace) -> None:
     symbols = split_list(args.symbols, upper=True)
     runs = parse_runs(args.runs)
-    tfs = sorted({tf for _, tf in runs})
+    tfs = sorted({tf for _, run_tfs in runs for tf in run_tfs})
     notifier = notifier_from_env()
     risk = RiskConfig()
 
     with CandleStore(args.db) as candles, PaperStore(args.db) as ps:
         now = int(time.time() * 1000)
-        traders = [PaperTrader(ps, f"{name}@{tf}", STRATEGIES[name], [tf],
+        traders = [PaperTrader(ps, f"{name}@{'+'.join(run_tfs)}", STRATEGIES[name], run_tfs,
                                start_equity=args.capital, risk=risk, now=now)
-                   for name, tf in runs]
+                   for name, run_tfs in runs]
         log.info("Paper Trading (DRY_RUN) – Konten: %s · Symbole: %s · Telegram %s",
                  ", ".join(t.name for t in traders), ", ".join(symbols),
                  "aktiv" if notifier else "aus")
@@ -120,8 +124,12 @@ async def run(args: argparse.Namespace) -> None:
                                     synced = True
                         if synced or first:
                             first = False
-                            frames = {(sym, tf): add_all(candles.load_df(sym, tf, limit=WINDOW))
-                                      for sym in symbols for tf in tfs}
+                            frames = {}
+                            for tf in tfs:
+                                per_sym = add_btc_regime(
+                                    {sym: add_all(candles.load_df(sym, tf, limit=WINDOW))
+                                     for sym in symbols})
+                                frames.update({(sym, tf): df for sym, df in per_sym.items()})
                             for tr in traders:
                                 res = tr.step(frames, tickers, now)
                                 await _report(tr, res, notifier)

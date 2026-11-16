@@ -1,19 +1,22 @@
-"""Backtest: eine Strategie auf historischen Kerzen mehrerer Symbole (ein Timeframe).
+"""Backtest: Strategien auf historischen Kerzen, ein gemeinsames Konto.
 
-Ablauf pro Kerze t (alle Symbole teilen sich ein Konto):
-  1. Offene Aufträge aus Kerze t-1 werden zum ERÖFFNUNGSKURS von t ausgeführt.
-  2. Offene Positionen werden gegen Hoch/Tief von t auf Stop/Ziel geprüft,
-     danach wird ein Trailing-Stop nachgezogen (gilt ab t+1).
-  3. Signale am SCHLUSS von t werden ausgewertet -> Auftrag für Kerze t+1.
-So fließt nie Wissen aus der Zukunft in eine Entscheidung ein.
+Ereignisbasiert – jede Kerze erzeugt zwei Ereignisse:
+  ERÖFFNUNG (open_time):   Aufträge aus der Vorkerze werden zum Eröffnungskurs
+                           ausgeführt (Einstieg, Gegensignal, Nachkauf).
+  SCHLUSS (open_time+TF):  Stop/Ziel werden gegen Hoch/Tief geprüft, ein
+                           Trailing-Stop nachgezogen, dann die Signale am
+                           Kerzenschluss ausgewertet -> Auftrag für die nächste Kerze.
+Kontostand und Positionsgrößen kennen nur Schlusskurse, die zum jeweiligen
+Zeitpunkt feststehen – auch wenn mehrere Timeframes (z. B. 1d und 4h) in einem
+Konto laufen. So fließt nie Wissen aus der Zukunft in eine Entscheidung ein.
 
-Mit `trade_from`/`trade_until` (ms) lässt sich ein Zeitfenster festlegen, z. B.
-um Strategien auf einem Zeitraum zu entwickeln und auf einem anderen zu prüfen.
-Die Indikatoren dürfen dabei auf Daten VOR dem Fenster aufbauen (Aufwärmphase).
+Mit `trade_from`/`trade_until` (ms, Kerzen-Eröffnung) lässt sich ein Zeitfenster
+festlegen. Die Indikatoren dürfen auf Daten VOR dem Fenster aufbauen.
 """
 
 from __future__ import annotations
 
+import heapq
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -21,6 +24,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from bitunix.client import INTERVAL_MS
 from risk import RiskConfig, RiskManager
 from signals.models import Signal
 from signals.rules import evaluate_candles
@@ -42,7 +46,7 @@ class BacktestResult:
     end_equity: float
     trades: list[Trade]
     orders: list[Order]
-    equity: pd.Series            # Kontostand (mark-to-market) je Kerze im Handelsfenster
+    equity: pd.Series            # Kontostand (zu bekannten Schlusskursen) im Handelsfenster
     metrics: dict = field(default_factory=dict)
 
 
@@ -62,17 +66,140 @@ def index_signals(frames: dict[str, pd.DataFrame], timeframe: str) -> SignalInde
     return out
 
 
+@dataclass
+class Stream:
+    """Ein Symbol auf einem Timeframe mit seiner Strategie."""
+
+    symbol: str
+    timeframe: str
+    df: pd.DataFrame
+    strategy: Strategy
+    signals: dict[int, list[Signal]]
+
+
 class _Arrays:
-    """Spalten eines Symbols als NumPy-Arrays (schneller als Zeilenzugriffe in pandas)."""
+    """Spalten als NumPy-Arrays (schneller als Zeilenzugriffe in pandas)."""
 
     def __init__(self, df: pd.DataFrame):
-        self.pos = {_ms(t): i for i, t in enumerate(df.index)}
+        self.t = np.array([_ms(t) for t in df.index], dtype="int64")
         col = lambda c: df[c].to_numpy(dtype="float64") if c in df else np.full(len(df), np.nan)  # noqa: E731
         self.o, self.h, self.l, self.c = col("open"), col("high"), col("low"), col("close")
         self.atr, self.ema200, self.adx = col("atr_14"), col("ema_200"), col("adx_14")
+        self.btc_up = (df["btc_up"].to_numpy(dtype="float64") if "btc_up" in df
+                       else np.full(len(df), np.nan))
 
     def row(self, i: int) -> dict:
-        return {"close": self.c[i], "ema_200": self.ema200[i], "adx_14": self.adx[i]}
+        b = self.btc_up[i]
+        return {"close": self.c[i], "ema_200": self.ema200[i], "adx_14": self.adx[i],
+                "btc_up": None if math.isnan(b) else bool(b)}
+
+
+def run_streams(
+    streams: list[Stream],
+    *,
+    start_equity: float = 1000.0,
+    risk: RiskConfig | None = None,
+    warmup: int = 200,
+    trade_from: int | None = None,
+    trade_until: int | None = None,
+    name: str = "",
+    timeframe_label: str = "",
+) -> BacktestResult:
+    """Mehrere Streams (Symbol × Timeframe × Strategie) in einem gemeinsamen Konto."""
+    acc = SimAccount(start_equity, mode="backtest", risk=RiskManager(risk or RiskConfig()))
+    arrs = [_Arrays(s.df) for s in streams]
+    steps = [INTERVAL_MS[s.timeframe] for s in streams]
+
+    # Handelsbeginn: frühestens nach `warmup` Kerzen des jeweiligen Streams
+    starts = [a.t[warmup] if len(a.t) > warmup else None for a in arrs]
+    valid = [x for x in starts if x is not None]
+    if not valid:
+        trade_from = None
+    else:
+        earliest = min(valid)
+        trade_from = max(earliest, trade_from) if trade_from is not None else earliest
+    if trade_until is None:
+        trade_until = max((int(a.t[-1]) for a in arrs if len(a.t)), default=0)
+
+    # Ereignisse: (Zeit, Art 0=Schluss/1=Eröffnung, Stream, Index). Schluss vor Eröffnung.
+    events: list[tuple[int, int, int, int]] = []
+    for k, a in enumerate(arrs):
+        if trade_from is None:
+            break
+        first = max(int(np.searchsorted(a.t, trade_from)), warmup)
+        last = int(np.searchsorted(a.t, trade_until, side="right"))
+        for i in range(first, last):
+            events.append((int(a.t[i]), 1, k, i))
+            events.append((int(a.t[i]) + steps[k], 0, k, i))
+    heapq.heapify(events)
+
+    pending: dict[int, list[tuple[str, Signal | None, float]]] = defaultdict(list)
+    last_close: dict[str, float] = {}
+    eq_t: list[int] = []
+    eq_v: list[float] = []
+    end_t = trade_from or 0
+
+    while events:
+        t, kind, k, i = heapq.heappop(events)
+        s, a, strat = streams[k], arrs[k], streams[k].strategy
+        key = (s.symbol, s.timeframe)
+        if kind == 1:  # ---- ERÖFFNUNG
+            for action, sig, atr in pending.pop(k, []):
+                o = a.o[i]
+                pos = acc.positions.get(key)
+                if action == "add":
+                    if pos is not None:
+                        acc.add_to(pos, o, t, "Nachkauf: Trend läuft weiter", prices=last_close)
+                    continue
+                if pos is not None and pos.direction != sig.direction:
+                    acc.close(pos, o, t, f"Gegensignal: {sig.reason}")
+                if key not in acc.positions:
+                    stop, target = strat.stop_and_target(sig.direction, o, atr)
+                    acc.open(symbol=s.symbol, timeframe=s.timeframe, strategy=strat.name,
+                             direction=sig.direction, price=o, time=t, stop=stop,
+                             target=target, reason=sig.reason, prices=last_close,
+                             trail_atr=strat.exits.trail_atr)
+            continue
+
+        # ---- SCHLUSS
+        pos = acc.positions.get(key)
+        atr = a.atr[i]
+        if pos is not None:
+            acc.check_exit(pos, a.o[i], a.h[i], a.l[i], t, atr)
+        last_close[s.symbol] = a.c[i]
+        if a.t[i] < trade_until and not math.isnan(atr) and atr > 0:
+            pos = acc.positions.get(key)
+            sigs = s.signals.get(int(a.t[i]))
+            chosen = strat.pick(sigs, a.row(i)) if sigs else None
+            if chosen is not None and (pos is None or pos.direction != chosen.direction):
+                pending[k].append(("open", chosen, float(atr)))
+            elif (pos is not None and strat.pyramid_max and pos.units <= strat.pyramid_max
+                  and pos.risk_free()):
+                sign = 1 if pos.direction == "long" else -1
+                if sign * (a.c[i] - pos.last_add_price) >= strat.pyramid_step_atr * atr:
+                    pending[k].append(("add", None, float(atr)))
+        eq_t.append(t)
+        eq_v.append(acc.equity(last_close))
+        end_t = t
+
+    # Offene Positionen zum letzten bekannten Schlusskurs schließen
+    for pos in list(acc.positions.values()):
+        acc.close(pos, last_close[pos.symbol], end_t, "Backtest-Ende")
+    if eq_v:
+        eq_v[-1] = acc.cash
+    # pro Zeitpunkt nur den letzten Stand behalten
+    equity = pd.Series(eq_v, index=pd.to_datetime(eq_t, unit="ms", utc=True), dtype="float64")
+    equity = equity[~equity.index.duplicated(keep="last")]
+
+    result = BacktestResult(
+        strategy=name or (streams[0].strategy.name if streams else ""),
+        timeframe=timeframe_label or "+".join(sorted({s.timeframe for s in streams})),
+        symbols=sorted({s.symbol for s in streams}),
+        start=trade_from or 0, end=end_t, start_equity=start_equity, end_equity=acc.cash,
+        trades=acc.trades, orders=acc.orders, equity=equity,
+    )
+    result.metrics = compute_metrics(result)
+    return result
 
 
 def run_backtest(
@@ -87,90 +214,14 @@ def run_backtest(
     trade_from: int | None = None,
     trade_until: int | None = None,
 ) -> BacktestResult:
-    """`frames`: pro Symbol ein DataFrame mit Indikatoren (indicators.add_all).
-    `warmup`: so viele Kerzen am Anfang nie handeln (EMA 200 braucht Vorlauf).
-    `signals`: vorab berechnete Signale (index_signals), sonst werden sie hier berechnet.
-    `trade_from`/`trade_until`: nur in diesem Zeitfenster (ms) handeln und bewerten."""
-    acc = SimAccount(start_equity, mode="backtest", risk=RiskManager(risk or RiskConfig()))
+    """Eine Strategie auf einem Timeframe über mehrere Symbole.
+    `frames`: pro Symbol ein DataFrame mit Indikatoren (indicators.add_all).
+    `signals`: vorab berechnete Signale (index_signals), sonst werden sie hier berechnet."""
     sig_at = signals if signals is not None else index_signals(frames, timeframe)
-    arr = {sym: _Arrays(df) for sym, df in frames.items()}
-
-    timeline = sorted(set().union(*(arr[s].pos for s in arr)))
-    if len(timeline) > warmup:
-        first = timeline[warmup]
-        trade_from = max(first, trade_from) if trade_from is not None else first
-    else:
-        trade_from = None
-    trade_until = trade_until if trade_until is not None else (timeline[-1] if timeline else 0)
-    exits = strategy.exits
-
-    pending: dict[str, tuple[Signal, float]] = {}   # Symbol -> (Signal, ATR)
-    last_close: dict[str, float] = {}
-    eq_t: list[int] = []
-    eq_v: list[float] = []
-    end_t = trade_from or 0
-
-    for t in timeline:
-        if trade_from is None or t > trade_until:
-            if trade_from is not None and t > trade_until:
-                break
-            continue
-        in_window = t >= trade_from
-        for sym, a in arr.items():
-            i = a.pos.get(t)
-            if i is None:
-                continue
-            o, h, low, c = a.o[i], a.h[i], a.l[i], a.c[i]
-
-            # 1. Auftrag aus der Vorkerze zum Eröffnungskurs ausführen
-            order = pending.pop(sym, None)
-            if order is not None:
-                sig, atr = order
-                pos = acc.positions.get((sym, timeframe))
-                if pos is not None and pos.direction != sig.direction:
-                    acc.close(pos, o, t, f"Gegensignal: {sig.reason}")
-                if (sym, timeframe) not in acc.positions:
-                    stop, target = strategy.stop_and_target(sig.direction, o, atr)
-                    acc.open(symbol=sym, timeframe=timeframe, strategy=strategy.name,
-                             direction=sig.direction, price=o, time=t, stop=stop,
-                             target=target, reason=sig.reason, prices=last_close,
-                             trail_atr=exits.trail_atr)
-
-            # 2. Stop/Ziel innerhalb der Kerze, danach Trailing-Stop nachziehen
-            pos = acc.positions.get((sym, timeframe))
-            if pos is not None:
-                acc.check_exit(pos, o, h, low, t, a.atr[i])
-            last_close[sym] = c
-
-            # 3. Signale am Kerzenschluss -> Auftrag für die nächste Kerze
-            if in_window and t < trade_until:
-                sigs = sig_at.get(sym, {}).get(t)
-                if sigs:
-                    chosen = strategy.pick(sigs, a.row(i))
-                    atr = a.atr[i]
-                    if chosen is not None and not math.isnan(atr) and atr > 0:
-                        pos = acc.positions.get((sym, timeframe))
-                        if pos is None or pos.direction != chosen.direction:
-                            pending[sym] = (chosen, float(atr))
-        if in_window:
-            eq_t.append(t)
-            eq_v.append(acc.equity(last_close))
-            end_t = t
-
-    # Offene Positionen zum letzten Schlusskurs schließen
-    for pos in list(acc.positions.values()):
-        acc.close(pos, last_close[pos.symbol], end_t, "Backtest-Ende")
-    if eq_v:
-        eq_v[-1] = acc.cash
-
-    equity = pd.Series(eq_v, index=pd.to_datetime(eq_t, unit="ms", utc=True), dtype="float64")
-    result = BacktestResult(
-        strategy=strategy.name, timeframe=timeframe, symbols=list(frames),
-        start=trade_from or 0, end=end_t, start_equity=start_equity, end_equity=acc.cash,
-        trades=acc.trades, orders=acc.orders, equity=equity,
-    )
-    result.metrics = compute_metrics(result)
-    return result
+    streams = [Stream(sym, timeframe, df, strategy, sig_at.get(sym, {}))
+               for sym, df in frames.items()]
+    return run_streams(streams, start_equity=start_equity, risk=risk, warmup=warmup,
+                       trade_from=trade_from, trade_until=trade_until)
 
 
 def compute_metrics(r: BacktestResult) -> dict:
@@ -184,7 +235,12 @@ def compute_metrics(r: BacktestResult) -> dict:
     days = (r.end - r.start) / 86_400_000 if r.end > r.start else 0
     ret = r.end_equity / r.start_equity - 1
     cagr = ((1 + ret) ** (365 / days) - 1) * 100 if days > 0 and ret > -1 else math.nan
-    weekly = eq.resample("W").last().pct_change().dropna() * 100 if len(eq) > 1 else pd.Series()
+    if len(eq) > 1:
+        weekly = pd.concat([pd.Series([r.start_equity], index=[eq.index[0]]), eq])
+        weekly = weekly[~weekly.index.duplicated(keep="last")].resample("W").last()
+        weekly = weekly.pct_change().dropna() * 100
+    else:
+        weekly = pd.Series(dtype="float64")
     return {
         "Trades": len(trades),
         "Trefferquote %": 100 * len(wins) / len(trades) if trades else math.nan,

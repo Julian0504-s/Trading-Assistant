@@ -49,11 +49,23 @@ class Strategy:
     with_trend_only: bool = False
     adx_min: float = 0.0          # nur handeln, wenn ADX 14 mindestens so hoch ist
     exits: ExitConfig = field(default_factory=ExitConfig)
+    long_only: bool = False       # keine Short-Trades
+    btc_filter: bool = False      # Long nur, wenn BTC über EMA 200 (Short nur darunter)
+    pyramid_max: int = 0          # max. Nachkäufe pro Position (0 = aus)
+    pyramid_step_atr: float = 2.0 # Nachkauf, wenn Kurs so viele ATR weitergelaufen ist
 
     def pick(self, signals: list[Signal], row: pd.Series) -> Signal | None:
         """Wählt aus den Signalen einer Kerze das zu handelnde (stärkstes zuerst)."""
         candidates = [s for s in signals
                       if s.rule in self.rules and s.strength >= self.min_strength]
+        if self.long_only:
+            candidates = [s for s in candidates if s.direction == "long"]
+        if self.btc_filter:
+            btc_up = row.get("btc_up")
+            if btc_up is None or pd.isna(btc_up):
+                return None
+            allowed = "long" if btc_up else "short"
+            candidates = [s for s in candidates if s.direction == allowed]
         if self.with_trend_only:
             ema200 = row.get("ema_200")
             if ema200 is None or pd.isna(ema200):
