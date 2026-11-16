@@ -163,3 +163,38 @@ def test_add_all_spalten():
         assert col in out.columns
     assert out.iloc[-1].drop("volume_spike").notna().all()
     assert len(out) == len(df) and "volume" in out.columns  # Original bleibt erhalten
+
+
+# ------------------------------------------------------------------- ADX/Donchian
+
+def test_adx_starker_aufwaertstrend():
+    from indicators import adx
+
+    n = 120
+    close = np.arange(n, dtype=float) + 100
+    df = frame(close, high=list(close + 1), low=list(close - 1))
+    a = adx(df, 14)
+    assert a["adx_14"].iloc[:27].isna().all()          # 1 + 13 (DI) + 13 (ADX) Aufwärmphase
+    assert a["adx_14"].iloc[-1] == pytest.approx(100)   # nur Aufwärtsbewegung
+    assert a["minus_di"].iloc[-1] == pytest.approx(0)
+    assert a["plus_di"].iloc[-1] == pytest.approx(50)   # +DM 1 bei TR 2
+
+
+def test_adx_seitwaerts_niedrig():
+    from indicators import adx
+
+    rng = np.random.default_rng(3)
+    close = 100 + rng.normal(0, 0.5, 400)
+    df = frame(close, high=list(close + 1), low=list(close - 1))
+    assert adx(df, 14)["adx_14"].iloc[-1] < 25
+
+
+def test_donchian_ohne_aktuelle_kerze():
+    from indicators import donchian
+
+    high = [1, 5, 3, 2, 4, 9]
+    low = [0, 4, 2, 1, 3, 8]
+    d = donchian(frame([1] * 6, high=high, low=low), 3)
+    assert d["dc_high_3"].tolist()[3:] == [5, 5, 4]
+    assert d["dc_low_3"].tolist()[3:] == [0, 1, 1]
+    assert d["dc_high_3"].iloc[:3].isna().all()

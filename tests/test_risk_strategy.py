@@ -176,7 +176,7 @@ def test_backtest_einstieg_naechste_kerze_und_ziel(monkeypatch):
     assert trade.r_multiple == pytest.approx(2.0, abs=0.1)            # Chance-Risiko 1:2
     assert res.metrics["Trades"] == 1 and res.metrics["Trefferquote %"] == 100
     assert res.end_equity == pytest.approx(1000 + trade.pnl)
-    assert len(res.equity) == len(df)
+    assert len(res.equity) == len(df) - 200   # Kontoverlauf erst nach der Aufwärmphase
 
 
 def test_backtest_kein_blick_in_die_zukunft(monkeypatch):
@@ -214,3 +214,60 @@ def test_backtest_mit_echten_regeln_laeuft():
         assert res.metrics["Trades"] > 0
         # Risiko pro Trade nie über 1 % (+ Gebühren/Slippage)
         assert min(t.pnl for t in res.trades) > -0.0125 * res.equity.max()
+
+
+# ------------------------------------------------- Trailing-Stop, ADX, Zeitfenster
+
+def test_trailing_stop_zieht_nach_und_sichert_gewinn():
+    acc = account()
+    pos = acc.open(symbol="BTC", timeframe="1h", strategy="t", direction="long", price=100,
+                   time=0, stop=96, target=math.inf, reason="x", trail_atr=3)
+    assert acc.check_exit(pos, 100, 105, 99, H, atr=1) is None
+    assert pos.stop == 102                                   # 105 - 3 * 1
+    assert acc.check_exit(pos, 104, 104.5, 103, 2 * H, atr=1) is None
+    assert pos.stop == 102                                   # zieht nie zurück
+    trade = acc.check_exit(pos, 103, 103, 101, 3 * H, atr=1)
+    assert trade.exit_reason == "Trailing-Stop" and trade.exit_price == 102
+    # R bezogen auf den Anfangs-Stop: +2 je Stück bei 4 Risiko = 0,5 R, abzüglich Gebühren
+    assert trade.r_multiple == pytest.approx(0.4495, abs=0.001)
+
+
+def test_trailing_stop_short():
+    acc = account()
+    pos = acc.open(symbol="BTC", timeframe="1h", strategy="t", direction="short", price=100,
+                   time=0, stop=104, target=-math.inf, reason="x", trail_atr=2)
+    acc.check_exit(pos, 100, 100.5, 95, H, atr=1)
+    assert pos.stop == 97
+    assert acc.check_exit(pos, 96, 97.5, 96, 2 * H).exit_reason == "Trailing-Stop"
+
+
+def test_adx_filter_und_ziel_ohne_grenze():
+    from strategy import ExitConfig, Strategy
+
+    s = Strategy("x", "x", "x", frozenset({"ema_cross"}), adx_min=25,
+                 exits=ExitConfig(stop_atr=2, target_atr=None, trail_atr=3))
+    r = pd.Series({"close": 100.0, "ema_200": 90.0, "adx_14": 30.0})
+    assert s.pick([sig()], r) is not None
+    r["adx_14"] = 20.0
+    assert s.pick([sig()], r) is None
+    stop, target = s.stop_and_target("long", 100, 2)
+    assert stop == 96 and target == math.inf
+
+
+def test_backtest_zeitfenster(monkeypatch):
+    df = frame(400)
+    signals = [Signal("BTC", "1h", "ema_cross", "long", 2, "x", 100.0, t * H) for t in (220, 330)]
+    monkeypatch.setattr(bt_module, "evaluate_candles", lambda d, s, tf: signals)
+    res = run_backtest({"BTC": df}, "1h", STRATEGIES["trend"], trade_from=300 * H,
+                       trade_until=399 * H)
+    # Signal bei 220 liegt vor dem Fenster und wird ignoriert, 330 wird gehandelt
+    assert [t.entry_time for t in res.trades] == [331 * H]
+    assert res.equity.index[0] == pd.Timestamp(300 * H, unit="ms", tz="UTC")
+    assert "Wochen im Plus %" in res.metrics
+
+
+def test_trend_trail_strategie():
+    s = STRATEGIES["trend_trail"]
+    assert s.exits.trail_atr == 4 and s.exits.target_atr is None
+    stop, target = s.stop_and_target("long", 100, 2)
+    assert stop == 94 and target == math.inf

@@ -93,3 +93,19 @@ def test_mehrere_konten_getrennt(tmp_path, signals_at):
         b = PaperTrader(ps, "strong@1h", STRATEGIES["strong"], ["1h"], start_equity=500)
         assert list(ps.accounts()["name"]) == ["trend@1h", "strong@1h"]
         assert a.acc.cash == 1000 and b.acc.cash == 500
+
+
+def test_alte_datenbank_wird_ergaenzt(tmp_path):
+    import sqlite3
+
+    db = tmp_path / "alt.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE paper_positions (account TEXT NOT NULL, id INTEGER NOT NULL, symbol TEXT,"
+                " timeframe TEXT, strategy TEXT, direction TEXT, entry_time INTEGER, entry_price REAL,"
+                " qty REAL, stop REAL, target REAL, reason TEXT, entry_fee REAL,"
+                " PRIMARY KEY (account, id))")
+    con.commit()
+    con.close()
+    with PaperStore(db) as ps:
+        cols = {r[1] for r in ps.conn.execute("PRAGMA table_info(paper_positions)")}
+        assert {"trail_atr", "initial_stop"} <= cols

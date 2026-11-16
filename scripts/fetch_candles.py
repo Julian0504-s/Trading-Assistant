@@ -29,6 +29,7 @@ from common import (
     DEFAULT_WATCHLIST,
     load_dotenv,
     setup_logging,
+    split_list,
 )
 
 def _fmt(ms: int | None) -> str:
@@ -53,6 +54,10 @@ async def main() -> int:
         "--history", action="store_true",
         help="zusätzlich lange Historie für Backtests laden (z. B. 1h: 1 Jahr, 15m: ~100 Tage)",
     )
+    parser.add_argument(
+        "--history-target", default="",
+        help="eigene Ziel-Anzahl je Timeframe für --history, z. B. 1h=17520,4h=8760",
+    )
     parser.add_argument("--db", default=os.getenv("DB_PATH", DEFAULT_DB_PATH))
     args = parser.parse_args()
 
@@ -63,6 +68,8 @@ async def main() -> int:
     if unknown:
         parser.error(f"Unbekannte Timeframes {unknown}, erlaubt: {', '.join(INTERVAL_MS)}")
 
+    targets = {k: int(v) for k, _, v in
+               (item.partition("=") for item in split_list(args.history_target))}
     errors = 0
     with CandleStore(args.db) as store:
         async with BitunixPublicClient() as client:
@@ -72,7 +79,7 @@ async def main() -> int:
                         r = await sync_candles(client, store, symbol, tf, backfill=args.backfill)
                         if args.history:
                             await backfill_history(client, store, symbol, tf,
-                                                   HISTORY_DEFAULTS.get(tf, args.backfill))
+                                                   targets.get(tf, HISTORY_DEFAULTS.get(tf, args.backfill)))
                             r = type(r)(r.symbol, r.interval, r.fetched,
                                         store.count(symbol, tf), r.latest_open_time)
                     except BitunixError as e:

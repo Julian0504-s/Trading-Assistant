@@ -2,6 +2,8 @@
 
 from .core import (
     add_all,
+    adx,
+    donchian,
     atr,
     bollinger,
     ema,
@@ -15,6 +17,8 @@ from .core import (
 
 __all__ = [
     "add_all",
+    "adx",
+    "donchian",
     "atr",
     "bollinger",
     "ema",

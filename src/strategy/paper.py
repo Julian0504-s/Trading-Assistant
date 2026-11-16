@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS paper_accounts (
 CREATE TABLE IF NOT EXISTS paper_positions (
     account TEXT NOT NULL, id INTEGER NOT NULL, symbol TEXT, timeframe TEXT, strategy TEXT,
     direction TEXT, entry_time INTEGER, entry_price REAL, qty REAL, stop REAL, target REAL,
-    reason TEXT, entry_fee REAL, PRIMARY KEY (account, id)
+    reason TEXT, entry_fee REAL, trail_atr REAL, initial_stop REAL,
+    PRIMARY KEY (account, id)
 );
 CREATE TABLE IF NOT EXISTS paper_orders (
     account TEXT NOT NULL, time INTEGER, mode TEXT, strategy TEXT, symbol TEXT,
@@ -66,6 +67,11 @@ class PaperStore:
         self.conn = sqlite3.connect(path)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(_SCHEMA)
+        # Ältere Datenbanken um neue Spalten ergänzen
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(paper_positions)")}
+        for col in ("trail_atr", "initial_stop"):
+            if col not in cols:
+                self.conn.execute(f"ALTER TABLE paper_positions ADD COLUMN {col} REAL")
 
     def close(self) -> None:
         self.conn.close()
@@ -87,7 +93,8 @@ class PaperStore:
         acc = SimAccount(start, mode="paper", cash=cash, next_id=next_id)
         for r in self.conn.execute(
                 "SELECT id, symbol, timeframe, strategy, direction, entry_time, entry_price, qty,"
-                " stop, target, reason, entry_fee FROM paper_positions WHERE account=?", (name,)):
+                " stop, target, reason, entry_fee, trail_atr, initial_stop FROM paper_positions"
+                " WHERE account=?", (name,)):
             pos = Position(*r)
             acc.positions[(pos.symbol, pos.timeframe)] = pos
         return acc, json.loads(progress)
@@ -109,9 +116,12 @@ class PaperStore:
                 (acc.cash, acc.next_id, json.dumps(progress), name))
             self.conn.execute("DELETE FROM paper_positions WHERE account=?", (name,))
             self.conn.executemany(
-                "INSERT INTO paper_positions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO paper_positions (account, id, symbol, timeframe, strategy, direction,"
+                " entry_time, entry_price, qty, stop, target, reason, entry_fee, trail_atr,"
+                " initial_stop) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [(name, p.id, p.symbol, p.timeframe, p.strategy, p.direction, p.entry_time,
-                  p.entry_price, p.qty, p.stop, p.target, p.reason, p.entry_fee)
+                  p.entry_price, p.qty, p.stop, p.target, p.reason, p.entry_fee, p.trail_atr,
+                  p.initial_stop)
                  for p in acc.positions.values()])
             self.conn.executemany(
                 "INSERT INTO paper_orders VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -194,7 +204,7 @@ class PaperTrader:
                 # Nur Kerzen prüfen, die nach dem Einstieg enden
                 if pos is not None and t + _tf_ms(tf) > pos.entry_time:
                     # Zeitstempel = Kerzenschluss (erst dann steht der Ausstieg fest)
-                    self.acc.check_exit(pos, o, h, low, t + _tf_ms(tf))
+                    self.acc.check_exit(pos, o, h, low, t + _tf_ms(tf), float(row["atr_14"]))
                 chosen = self.strategy.pick(signals.get(t, []), row)
                 atr = row.get("atr_14")
                 if chosen is not None and pd.notna(atr) and atr > 0:
@@ -210,7 +220,8 @@ class PaperTrader:
                         new = self.acc.open(symbol=sym, timeframe=tf, strategy=self.strategy.name,
                                             direction=chosen.direction, price=price,
                                             time=entry_time, stop=stop, target=target,
-                                            reason=chosen.reason, prices=prices)
+                                            reason=chosen.reason, prices=prices,
+                                            trail_atr=self.strategy.exits.trail_atr)
                         if new is not None:
                             opened.append(new)
                 self.progress[key] = t

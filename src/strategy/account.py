@@ -32,6 +32,12 @@ class Position:
     target: float
     reason: str
     entry_fee: float
+    trail_atr: float | None = None   # Trailing-Stop-Abstand in ATR (None = aus)
+    initial_stop: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.initial_stop is None:
+            self.initial_stop = self.stop
 
     @property
     def notional(self) -> float:
@@ -118,7 +124,8 @@ class SimAccount:
     # ------------------------------------------------------------- Aktionen
     def open(self, *, symbol: str, timeframe: str, strategy: str, direction: str, price: float,
              time: int, stop: float, target: float, reason: str,
-             prices: dict[str, float] | None = None) -> Position | None:
+             prices: dict[str, float] | None = None,
+             trail_atr: float | None = None) -> Position | None:
         """Eröffnet eine Position. Gibt None zurück, wenn der Risk Manager ablehnt."""
         if (symbol, timeframe) in self.positions:
             return None
@@ -137,7 +144,7 @@ class SimAccount:
         pid = next(self._ids)
         self.next_id = pid + 1
         pos = Position(pid, symbol, timeframe, strategy, direction, time, fill, qty,
-                       stop, target, reason, fee)
+                       stop, target, reason, fee, trail_atr)
         self.positions[(symbol, timeframe)] = pos
         self._log(pos, time, "Eröffnung", "Kauf" if direction == "long" else "Verkauf",
                   fill, fee, None, reason)
@@ -150,7 +157,7 @@ class SimAccount:
         pnl = gross - fee - pos.entry_fee
         self.cash += gross - fee
         del self.positions[(pos.symbol, pos.timeframe)]
-        risk = abs(pos.entry_price - pos.stop) * pos.qty
+        risk = abs(pos.entry_price - pos.initial_stop) * pos.qty
         trade = Trade(pos.id, pos.symbol, pos.timeframe, pos.strategy, pos.direction,
                       pos.entry_time, time, pos.entry_price, fill, pos.qty, pnl,
                       fee + pos.entry_fee, pnl / risk if risk else 0.0, pos.reason, reason)
@@ -159,14 +166,25 @@ class SimAccount:
                   fill, fee, pnl, reason)
         return trade
 
-    def check_exit(self, pos: Position, o: float, h: float, low: float, time: int) -> Trade | None:
+    def check_exit(self, pos: Position, o: float, h: float, low: float, time: int,
+                   atr: float | None = None) -> Trade | None:
         """Prüft eine Kerze auf Stop/Ziel. Berührt eine Kerze beides, zählt
-        vorsichtshalber der Stop. Kurslücken werden zum Eröffnungskurs ausgeführt."""
+        vorsichtshalber der Stop. Kurslücken werden zum Eröffnungskurs ausgeführt.
+        Ohne Ausstieg wird danach der Trailing-Stop nachgezogen (gilt ab der nächsten Kerze)."""
+        trade = self._exit(pos, o, h, low, time)
+        if trade is None and pos.trail_atr and atr and atr > 0:
+            if pos.direction == "long":
+                pos.stop = max(pos.stop, h - pos.trail_atr * atr)
+            else:
+                pos.stop = min(pos.stop, low + pos.trail_atr * atr)
+        return trade
+
+    def _exit(self, pos: Position, o: float, h: float, low: float, time: int) -> Trade | None:
         if pos.direction == "long":
             if o <= pos.stop:
                 return self.close(pos, o, time, "Stop-Loss (Kurslücke)")
             if low <= pos.stop:
-                return self.close(pos, pos.stop, time, "Stop-Loss")
+                return self.close(pos, pos.stop, time, self._stop_name(pos))
             if o >= pos.target:
                 return self.close(pos, o, time, "Kursziel (Kurslücke)")
             if h >= pos.target:
@@ -175,12 +193,16 @@ class SimAccount:
             if o >= pos.stop:
                 return self.close(pos, o, time, "Stop-Loss (Kurslücke)")
             if h >= pos.stop:
-                return self.close(pos, pos.stop, time, "Stop-Loss")
+                return self.close(pos, pos.stop, time, self._stop_name(pos))
             if o <= pos.target:
                 return self.close(pos, o, time, "Kursziel (Kurslücke)")
             if low <= pos.target:
                 return self.close(pos, pos.target, time, "Kursziel")
         return None
+
+    @staticmethod
+    def _stop_name(pos: Position) -> str:
+        return "Trailing-Stop" if pos.stop != pos.initial_stop else "Stop-Loss"
 
     def _log(self, pos: Position, time: int, action: str, side: str, price: float, fee: float,
              pnl: float | None, reason: str) -> None:

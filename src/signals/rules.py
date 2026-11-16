@@ -217,7 +217,39 @@ def bb_breakout(df: pd.DataFrame, symbol: str, timeframe: str) -> list[Signal]:
     return out
 
 
-CANDLE_RULES: list[CandleRule] = [ema_cross, ema200_trend, rsi_extreme, bb_breakout]
+def donchian_breakout(df: pd.DataFrame, symbol: str, timeframe: str) -> list[Signal]:
+    """Schlusskurs bricht über das Hoch (unter das Tief) der vorherigen 20 Kerzen.
+
+    Klassischer Trendfolge-Einstieg. Stärke: 1 + in Trendrichtung (EMA 200)
+    + erhöhtes Volumen.
+    """
+    if "dc_high_20" not in df:
+        return []
+    out: list[Signal] = []
+    up = cross_above(df["close"], df["dc_high_20"])
+    down = cross_below(df["close"], df["dc_low_20"])
+    for ts in df.index[up | down]:
+        row = df.loc[ts]
+        direction = "long" if up.loc[ts] else "short"
+        strength, notes = 1, []
+        if _trend(row) == direction:
+            strength += 1
+            notes.append("in Trendrichtung (EMA 200)")
+        bonus, vol = _volume_note(row)
+        strength += bonus
+        if direction == "long":
+            text = (f"Ausbruch über das 20-Kerzen-Hoch ({fmt_price(row['dc_high_20'])}), "
+                    f"Schluss {fmt_price(row['close'])}")
+        else:
+            text = (f"Ausbruch unter das 20-Kerzen-Tief ({fmt_price(row['dc_low_20'])}), "
+                    f"Schluss {fmt_price(row['close'])}")
+        out.append(Signal(symbol, timeframe, "donchian_breakout", direction, strength,
+                          _join(text, *notes, vol), float(row["close"]), _ms(ts)))
+    return out
+
+
+CANDLE_RULES: list[CandleRule] = [ema_cross, ema200_trend, rsi_extreme, bb_breakout,
+                                  donchian_breakout]
 
 
 def evaluate_candles(df: pd.DataFrame, symbol: str, timeframe: str) -> list[Signal]:

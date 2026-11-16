@@ -121,6 +121,40 @@ def volume_spike(df: pd.DataFrame, period: int = 20, factor: float = 2.0) -> pd.
     return (volume_ratio(df, period) >= factor).rename("volume_spike")
 
 
+def adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+    """Average Directional Index nach Wilder: Trendstärke (0–100) plus +DI/−DI.
+
+    ADX über ~20–25 gilt als trendender Markt, darunter eher seitwärts.
+    """
+    up = df["high"].diff()
+    down = -df["low"].diff()
+    plus_dm = up.where((up > down) & (up > 0), 0.0)
+    minus_dm = down.where((down > up) & (down > 0), 0.0)
+    plus_dm.iloc[0] = minus_dm.iloc[0] = np.nan
+    tr = true_range(df)
+    tr.iloc[0] = np.nan
+    alpha = 1.0 / period
+    atr_ = _seeded_ewm(tr, period, alpha)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        plus_di = 100 * _seeded_ewm(plus_dm, period, alpha) / atr_
+        minus_di = 100 * _seeded_ewm(minus_dm, period, alpha) / atr_
+        dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    dx = dx.where((plus_di + minus_di) != 0, 0.0).where(plus_di.notna())
+    return pd.DataFrame({f"adx_{period}": _seeded_ewm(dx, period, alpha),
+                         "plus_di": plus_di, "minus_di": minus_di})
+
+
+def donchian(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+    """Donchian-Kanal der VORHERIGEN `period` Kerzen (aktuelle Kerze nicht enthalten).
+
+    Ein Schluss über `dc_high` ist ein Ausbruch über das Hoch der letzten N Kerzen.
+    """
+    return pd.DataFrame({
+        f"dc_high_{period}": df["high"].shift(1).rolling(period, min_periods=period).max(),
+        f"dc_low_{period}": df["low"].shift(1).rolling(period, min_periods=period).min(),
+    })
+
+
 def add_all(df: pd.DataFrame) -> pd.DataFrame:
     """Hängt alle Standard-Indikatoren aus der CLAUDE.md als Spalten an (Kopie)."""
     out = df.copy()
@@ -132,4 +166,5 @@ def add_all(df: pd.DataFrame) -> pd.DataFrame:
     out = out.join(bollinger(df))
     out["volume_ratio"] = volume_ratio(df)
     out["volume_spike"] = volume_spike(df)
+    out = out.join(adx(df)).join(donchian(df))
     return out

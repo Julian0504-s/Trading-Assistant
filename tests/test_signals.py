@@ -228,3 +228,17 @@ def test_scan_is_fresh_letzte_drei_kerzen():
     assert fresh == [False, True, True]
     assert not r.is_fresh(sig(10 * H, sym="ETHUSDT"))  # keine Kerzen bekannt
     assert r.is_fresh(Signal("X", "funding", "funding_extreme", "long", 1, "", 1.0, 0))
+
+
+def test_donchian_breakout():
+    from signals.rules import donchian_breakout
+
+    df = ind_frame(3, close=[100, 104, 112], ema_200=[95, 95, 95], volume_ratio=[1, 1, 2],
+                   dc_high_20=[110, 110, 110], dc_low_20=[90, 90, 90])
+    (s,) = donchian_breakout(df, "BTC", "4h")
+    assert (s.direction, s.strength, s.rule) == ("long", 3, "donchian_breakout")
+    assert "20-Kerzen-Hoch (110)" in s.reason
+    df = ind_frame(2, close=[95, 85], dc_high_20=[110, 110], dc_low_20=[90, 90])
+    (s,) = donchian_breakout(df, "BTC", "4h")
+    assert (s.direction, s.strength) == ("short", 1)
+    assert donchian_breakout(ind_frame(2), "BTC", "4h") == []   # ohne Kanal-Spalten

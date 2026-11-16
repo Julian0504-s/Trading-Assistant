@@ -141,7 +141,8 @@ uv run python scripts/backtest.py --strategies trend --timeframes 4h,1d
 ```
 
 - **Strategien:** `trend` (Trendfolge: EMA-Cross, EMA-200-Trend, Bollinger-Breakout ab
-  „mittel“, nur in Trendrichtung), `all_medium` (alle Regeln ab „mittel“), `strong`
+  „mittel“, nur in Trendrichtung), `trend_trail` (wie `trend`, aber Stop 3 ATR und
+  Trailing-Stop 4 ATR statt festem Ziel), `all_medium` (alle Regeln ab „mittel“), `strong`
   (alle Regeln, nur „stark“).
 - **Ausführung:** Signal am Kerzenschluss → Einstieg zur Eröffnung der nächsten Kerze.
   Stop 1,5 ATR, Ziel 3 ATR. Berührt eine Kerze beides, zählt der Stop. Gebühren 0,06 %
@@ -149,6 +150,23 @@ uv run python scripts/backtest.py --strategies trend --timeframes 4h,1d
 - **Risiko:** 1 % des Kontos pro Trade, Hebel max. 3x über alle offenen Positionen,
   Tagesverlust-Limit 3 % (danach keine neuen Trades bis zum nächsten UTC-Tag).
 - Ergebnisse in `data/backtests/<Zeitstempel>/`: Übersicht, Kontoverlauf, Order-Log als CSV.
+
+## Strategie-Forschung
+
+```bash
+uv run python scripts/fetch_candles.py --symbols BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,BNBUSDT,ADAUSDT,LINKUSDT,ZECUSDT,AVAXUSDT \
+    --timeframes 1h,4h,1d --history --history-target 1h=17520,4h=8760,1d=1500
+uv run python scripts/research.py
+```
+
+45 Varianten pro Timeframe (Einstiegsregeln × ADX-Filter × Ausstiege inkl. Trailing-Stop)
+auf 10 Coins. **Entwicklung** auf allen Daten vor dem letzten Jahr, Auswahl nach vorab
+festgelegter Regel (genug Trades, Profitfaktor ≥ 1,1, bestes Verhältnis Jahresrendite /
+Drawdown), **Prüfung** einmalig auf dem letzten Jahr. Bericht in `data/research/`.
+
+Stand 16.11.2026: Nur auf 1d hat eine Variante die Prüfung bestanden
+(`trend_trail`: Trendfolge mit Stop 3 ATR und Trailing-Stop 4 ATR, Prüfjahr +27 %,
+max. Drawdown −12,5 %). 1h und 4h sind in der Prüfung durchgefallen.
 
 ## Paper Trading
 

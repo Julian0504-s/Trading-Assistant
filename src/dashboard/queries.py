@@ -21,6 +21,7 @@ RULE_LABEL = {
     "ema200_trend": "EMA-200-Trend",
     "rsi_extreme": "RSI extrem",
     "bb_breakout": "Bollinger-Breakout",
+    "donchian_breakout": "Donchian-Ausbruch",
     "funding_extreme": "Funding extrem",
 }
 
