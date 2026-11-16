@@ -197,6 +197,22 @@ gleichgerichtet, ADX ≥ 25, Schluss zum Tagesende), mit Market- oder Limit-Orde
 Stand 16.11.2026: **keine** Variante bestand die Auswahl – alle verloren im
 Auswahljahr 35–99 % (bei 1 % Risiko pro Trade). Die 1d-Strategie bleibt die Basis.
 
+## Langzeittest ab 2020 (Binance-Archiv)
+
+```bash
+uv run python scripts/fetch_binance_history.py   # Tageskerzen + Funding ab 2020 -> data/binance.db
+uv run python scripts/long_backtest.py           # trend_trail@1d, 10.000 USDT
+```
+
+Bitunix liefert Kerzen erst ab 04/2022. Für längere Tests werden Kurse und
+Funding-Raten aus dem öffentlichen Binance-Archiv (`data.binance.vision`,
+USDT-M-Futures) geladen – in eine eigene Datenbank, nur für Backtests. Ein
+Plausibilitäts-Check vergleicht vorher beide Quellen im gemeinsamen Zeitraum.
+
+Stand 16.11.2026 (07/2020–10/2026, 10.000 USDT): +507 % bzw. +33 % pro Jahr, jedes
+Kalenderjahr positiv (2022: +5 %), tiefster Kontostand 9.781 USDT, größter Rückgang
+−29 %, Positionsvolumen nie über 0,93x des Kontos.
+
 ## Paper Trading
 
 ```bash

@@ -48,6 +48,8 @@ class BacktestResult:
     orders: list[Order]
     equity: pd.Series            # Kontostand (zu bekannten Schlusskursen) im Handelsfenster
     funding: float = 0.0         # gezahltes Funding (+) bzw. erhaltenes (−) in USDT
+    exposure: pd.Series | None = None  # offenes Positionsvolumen / Kontostand je Zeitpunkt
+    long_exposure: pd.Series | None = None  # nur Long-Volumen / Kontostand
     metrics: dict = field(default_factory=dict)
 
 
@@ -163,6 +165,17 @@ def run_streams(
     last_close: dict[str, float] = {}
     eq_t: list[int] = []
     eq_v: list[float] = []
+    ex_v: list[float] = []
+    lx_v: list[float] = []
+
+    def snapshot(t: int) -> None:
+        e = acc.equity(last_close)
+        eq_t.append(t)
+        eq_v.append(e)
+        price = lambda p: last_close.get(p.symbol, p.entry_price)  # noqa: E731
+        ex_v.append(sum(p.qty * price(p) for p in acc.positions.values()) / e if e > 0 else 0.0)
+        lx_v.append(sum(p.qty * price(p) for p in acc.positions.values()
+                        if p.direction == "long") / e if e > 0 else 0.0)
     end_t = trade_from or 0
 
     while events:
@@ -205,8 +218,7 @@ def run_streams(
             if pos is not None:
                 acc.close(pos, a.c[i], t, "Tagesende")
             pending.pop(k, None)
-            eq_t.append(t)
-            eq_v.append(acc.equity(last_close))
+            snapshot(t)
             end_t = t
             continue  # keine neuen Einstiege über den Tageswechsel
         if a.t[i] < trade_until and not math.isnan(atr) and atr > 0:
@@ -220,8 +232,7 @@ def run_streams(
                 sign = 1 if pos.direction == "long" else -1
                 if sign * (a.c[i] - pos.last_add_price) >= strat.pyramid_step_atr * atr:
                     pending[k].append(("add", None, float(atr)))
-        eq_t.append(t)
-        eq_v.append(acc.equity(last_close))
+        snapshot(t)
         end_t = t
 
     # Offene Positionen zum letzten bekannten Schlusskurs schließen
@@ -231,7 +242,10 @@ def run_streams(
         eq_v[-1] = acc.cash
     # pro Zeitpunkt nur den letzten Stand behalten
     equity = pd.Series(eq_v, index=pd.to_datetime(eq_t, unit="ms", utc=True), dtype="float64")
-    equity = equity[~equity.index.duplicated(keep="last")]
+    keep = ~equity.index.duplicated(keep="last")
+    equity = equity[keep]
+    exposure = pd.Series(ex_v, index=pd.to_datetime(eq_t, unit="ms", utc=True))[keep]
+    long_exposure = pd.Series(lx_v, index=pd.to_datetime(eq_t, unit="ms", utc=True))[keep]
 
     result = BacktestResult(
         strategy=name or (streams[0].strategy.name if streams else ""),
@@ -239,6 +253,7 @@ def run_streams(
         symbols=sorted({s.symbol for s in streams}),
         start=trade_from or 0, end=end_t, start_equity=start_equity, end_equity=acc.cash,
         trades=acc.trades, orders=acc.orders, equity=equity, funding=-acc.funding_total,
+        exposure=exposure, long_exposure=long_exposure,
     )
     result.metrics = compute_metrics(result)
     return result
