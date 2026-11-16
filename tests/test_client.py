@@ -183,7 +183,9 @@ def test_get_funding_rate_objekt_und_liste():
                 return await c.get_funding_rate("BTCUSDT")
 
         fr = run(go())
-        assert fr.funding_rate == pytest.approx(0.000105)
+        # API liefert Prozent -> intern Bruch
+        assert fr.funding_rate == pytest.approx(0.00000105)
+        assert fr.max_funding_rate == pytest.approx(0.003)
         assert fr.funding_interval_h == 8
         assert fr.next_funding_time == 1794816000000
 

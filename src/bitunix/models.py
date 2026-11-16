@@ -88,9 +88,17 @@ class Ticker:
 class FundingRate:
     """Aktuelle Funding Rate.
 
-    `funding_rate` ist der Rohwert der API (beobachtet: Dezimalbruch, z. B.
-    0.0001 = 0,01 % pro Intervall). `funding_interval_h` = Abrechnungsintervall
-    in Stunden.
+    `funding_rate`, `max_funding_rate`, `min_funding_rate` sind hier als
+    DEZIMALBRUCH gespeichert (0.0001 = 0,01 % pro Intervall).
+
+    Achtung Einheiten: Die Doku nennt keine Einheit. Die Endpunkte für die
+    AKTUELLE Rate (funding_rate, funding_rate/batch) liefern Prozent, der
+    Historien-Endpunkt liefert Brüche. Belege (live geprüft): Historie ist bei
+    BTC exakt auf ±0.0001 begrenzt, die aktuellen Werte liegen ~100× höher
+    (z. B. ETH -0.003312) und das Limit ist 0.3 bzw. 0.375 – die üblichen
+    Börsen-Limits in Prozent. Deshalb wird hier durch 100 geteilt.
+
+    `funding_interval_h` = Abrechnungsintervall in Stunden.
     """
 
     symbol: str
@@ -105,14 +113,18 @@ class FundingRate:
 
     @classmethod
     def from_api(cls, d: dict[str, Any]) -> FundingRate:
+        def pct(v: Any) -> float | None:
+            x = _f(v)
+            return None if x is None else x / 100.0
+
         return cls(
             symbol=d["symbol"],
-            funding_rate=float(d["fundingRate"]),
+            funding_rate=float(d["fundingRate"]) / 100.0,
             mark_price=_f(d.get("markPrice")),
             last_price=_f(d.get("lastPrice")),
             index_price=_f(d.get("indexPrice")),
             next_funding_time=_i(d.get("nextFundingTime")),
             funding_interval_h=_i(d.get("fundingInterval")),
-            max_funding_rate=_f(d.get("maxFundingRate")),
-            min_funding_rate=_f(d.get("minFundingRate")),
+            max_funding_rate=pct(d.get("maxFundingRate")),
+            min_funding_rate=pct(d.get("minFundingRate")),
         )
