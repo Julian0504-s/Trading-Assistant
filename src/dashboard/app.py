@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from dashboard import queries as data
-from dashboard.charts import detail_chart
+from dashboard.charts import detail_chart, equity_chart
 from dashboard.theme import palette
 from data import settings
 from signals.rules import FUNDING_EXTREME_PER_8H
@@ -77,7 +77,8 @@ with st.sidebar:
 
 theme = palette(getattr(st.context.theme, "type", None))
 
-tab_overview, tab_chart, tab_feed = st.tabs(["Marktübersicht", "Chart", "Signal-Feed"])
+tab_overview, tab_chart, tab_feed, tab_bt, tab_paper = st.tabs(
+    ["Marktübersicht", "Chart", "Signal-Feed", "Backtest", "Paper Trading"])
 
 # ------------------------------------------------------------------------- Übersicht
 
@@ -195,3 +196,83 @@ with tab_feed:
             },
         )
         st.caption(DISCLAIMER)
+
+# --------------------------------------------------------------------------- Backtest
+
+with tab_bt:
+    stamp, runs = data.latest_backtest()
+    if not runs:
+        st.info("Noch kein Backtest. Im Terminal: `uv run python scripts/fetch_candles.py --history` "
+                "und dann `uv run python scripts/backtest.py`.")
+    else:
+        st.caption(f"Lauf vom {stamp[:4]}-{stamp[4:6]}-{stamp[6:8]} {stamp[9:11]}:{stamp[11:13]} UTC · "
+                   f"je Zeile ein eigenes Konto mit 1.000 USDT über {', '.join(runs[0].get('symbols', SYMBOLS))} · "
+                   "1 % Risiko pro Trade, Stop 1,5 ATR, Ziel 3 ATR, Gebühren 0,06 % pro Seite")
+        table = data.backtest_table(runs)
+        st.dataframe(table, hide_index=True, use_container_width=True, column_config={
+            "Zeitraum (Tage)": st.column_config.NumberColumn(format="%.0f"),
+            "Trefferquote %": st.column_config.NumberColumn(format="%.0f %%"),
+            "Rendite %": st.column_config.NumberColumn(format="%+.1f %%"),
+            "Max. Drawdown %": st.column_config.NumberColumn(format="%.1f %%",
+                                                             help="Größter Rückgang vom Höchststand"),
+            "Profitfaktor": st.column_config.NumberColumn(format="%.2f",
+                                                          help="Summe Gewinne / Summe Verluste; > 1 = profitabel"),
+            "Ø R pro Trade": st.column_config.NumberColumn(format="%+.2f",
+                                                           help="Ergebnis pro Trade in Vielfachen des Risikos"),
+            "Gebühren USDT": st.column_config.NumberColumn(format="%.0f"),
+        })
+        labels = [f"{r['label']} · {r['timeframe']}" for r in runs]
+        pick = st.selectbox("Kontoverlauf anzeigen", labels,
+                            index=next((i for i, r in enumerate(runs)
+                                        if r["strategy"] == "trend" and r["timeframe"] == "4h"), 0))
+        r = runs[labels.index(pick)]
+        st.plotly_chart(equity_chart(r["equity"], 1000.0, theme, pick), use_container_width=True,
+                        theme=None, config={"displaylogo": False})
+        st.caption("Vergangene Ergebnisse sind keine Garantie für die Zukunft. " + DISCLAIMER)
+
+# ---------------------------------------------------------------------- Paper Trading
+
+with tab_paper:
+    accounts = data.paper_overview(DB)
+    if not accounts:
+        st.info("Noch kein Paper Trading. Im Terminal: `uv run python scripts/paper_trade.py`")
+    else:
+        st.caption("Simulation ohne Echtgeld: Die Strategie läuft live mit, Orders werden nur geloggt.")
+        cols = st.columns(min(4, len(accounts)))
+        for i, a in enumerate(accounts):
+            cols[i % len(cols)].metric(
+                a["name"], f"{a['equity_now']:,.2f} USDT", f"{a['return_pct']:+.2f} %",
+                help=f"Seit {a['since']:%d.%m.%Y %H:%M} UTC · {a['trades']} Trades",
+            )
+        pick = st.selectbox("Konto", [a["name"] for a in accounts])
+        a = next(x for x in accounts if x["name"] == pick)
+        if len(a["equity"]) > 1:
+            st.plotly_chart(equity_chart(a["equity"], a["start_equity"], theme, f"Kontoverlauf {pick}"),
+                            use_container_width=True, theme=None, config={"displaylogo": False})
+        st.subheader("Offene Positionen")
+        if a["positions"].empty:
+            st.caption("Keine offenen Positionen.")
+        else:
+            pos = a["positions"].copy()
+            pos["Seit"] = pd.to_datetime(pos["entry_time"], unit="ms", utc=True)
+            pos["Richtung"] = pos["direction"].map({"long": "▲ Long", "short": "▼ Short"})
+            st.dataframe(pos[["Seit", "symbol", "Richtung", "entry_price", "qty", "stop", "target", "reason"]]
+                         .rename(columns={"symbol": "Symbol", "entry_price": "Einstieg", "qty": "Menge",
+                                          "stop": "Stop", "target": "Ziel", "reason": "Grund"}),
+                         hide_index=True, use_container_width=True)
+        st.subheader("Abgeschlossene Trades")
+        if a["closed"].empty:
+            st.caption("Noch keine abgeschlossenen Trades.")
+        else:
+            tr = a["closed"].sort_values("exit_time", ascending=False).copy()
+            tr["Ende"] = pd.to_datetime(tr["exit_time"], unit="ms", utc=True)
+            tr["Richtung"] = tr["direction"].map({"long": "▲ Long", "short": "▼ Short"})
+            st.dataframe(tr[["Ende", "symbol", "Richtung", "entry_price", "exit_price", "pnl",
+                             "r_multiple", "exit_reason", "entry_reason"]]
+                         .rename(columns={"symbol": "Symbol", "entry_price": "Einstieg",
+                                          "exit_price": "Ausstieg", "pnl": "Ergebnis USDT",
+                                          "r_multiple": "R", "exit_reason": "Ausstieg wegen",
+                                          "entry_reason": "Einstieg wegen"}),
+                         hide_index=True, use_container_width=True)
+        st.caption("Order-Log als CSV: `uv run python scripts/paper_trade.py --export orders.csv`. "
+                   + DISCLAIMER)

@@ -228,3 +228,65 @@ def symbol_cards(
             "signals": sig.to_dict("records"),
         })
     return cards
+
+
+# ------------------------------------------------------------ Backtest & Paper
+
+def latest_backtest(out_dir: str = "data/backtests") -> tuple[str | None, list[dict]]:
+    """Neuester Backtest-Lauf: (Zeitstempel, Liste der Ergebnisse inkl. Kontoverlauf)."""
+    import json
+    from pathlib import Path
+
+    base = Path(out_dir)
+    marker = base / "latest.txt"
+    if not marker.exists():
+        return None, []
+    stamp = marker.read_text().strip()
+    summary_path = base / stamp / "summary.json"
+    if not summary_path.exists():
+        return stamp, []
+    runs = json.loads(summary_path.read_text())
+    for r in runs:
+        eq_path = base / stamp / f"{r['strategy']}_{r['timeframe']}" / "equity.csv"
+        if eq_path.exists():
+            eq = pd.read_csv(eq_path, index_col=0, parse_dates=True)["Kontostand"]
+            step = max(1, len(eq) // 600)  # für die Anzeige ausdünnen
+            r["equity"] = eq.iloc[::step]
+        else:
+            r["equity"] = pd.Series(dtype="float64")
+    return stamp, runs
+
+
+def backtest_table(runs: list[dict]) -> pd.DataFrame:
+    rows = []
+    for r in runs:
+        m = r["metrics"]
+        rows.append({"Strategie": r["label"], "Timeframe": r["timeframe"],
+                     "Zeitraum (Tage)": m["Tage"], "Trades": m["Trades"],
+                     "Trefferquote %": m["Trefferquote %"], "Rendite %": m["Rendite %"],
+                     "Max. Drawdown %": m["Max. Drawdown %"], "Profitfaktor": m["Profitfaktor"],
+                     "Ø R pro Trade": m["Ø R pro Trade"], "Gebühren USDT": m["Gebühren"]})
+    return pd.DataFrame(rows)
+
+
+def paper_overview(db: str) -> list[dict]:
+    """Paper-Konten mit Kennzahlen, offenen Positionen, Trades und Kontoverlauf."""
+    from strategy.paper import PaperStore
+
+    out = []
+    with PaperStore(db) as ps:
+        for _, a in ps.accounts().iterrows():
+            name = a["name"]
+            trades = ps.trades(name)
+            eq = ps.equity(name)
+            last = float(eq.iloc[-1]) if len(eq) else float(a["cash"])
+            wins = int((trades["pnl"] > 0).sum()) if len(trades) else 0
+            out.append({
+                "name": name, "strategy": a["strategy"], "timeframes": a["timeframes"],
+                "start_equity": float(a["start_equity"]), "equity_now": last,
+                "return_pct": (last / a["start_equity"] - 1) * 100,
+                "trades": len(trades), "win_rate": 100 * wins / len(trades) if len(trades) else math.nan,
+                "since": pd.Timestamp(int(a["created_at"]), unit="ms", tz="UTC"),
+                "positions": ps.positions(name), "closed": trades, "equity": eq,
+            })
+    return out

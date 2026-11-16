@@ -4,8 +4,8 @@ Aufruf:
     uv run python scripts/watch.py                 # Standard: alle 60 s
     uv run python scripts/watch.py --interval 120
 
-Ein Timeframe wird nur nachgeladen, wenn seit dem letzten Durchlauf eine neue
-Kerze abgeschlossen sein kann (1h-Kerzen also nur einmal pro Stunde).
+Ein Timeframe wird nur nachgeladen, wenn seine zuletzt abgeschlossene Kerze
+noch fehlt (1h-Kerzen also nur einmal pro Stunde).
 Beenden mit Strg+C.
 
 Telegram: TELEGRAM_BOT_TOKEN und TELEGRAM_CHAT_ID in .env setzen. Ohne diese
@@ -25,7 +25,7 @@ import time
 from alerts import CooldownStore, TelegramError, dispatch
 from bitunix.client import INTERVAL_MS, BitunixError, BitunixPublicClient
 from data.store import CandleStore
-from data.sync import sync_candles
+from data.sync import needs_sync, sync_candles
 from signals import SignalStore
 from signals.rules import FUNDING_EXTREME_PER_8H
 from signals.scan import scan_watchlist
@@ -44,21 +44,6 @@ from common import (
 
 log = logging.getLogger("watch")
 
-# Kerzen werden erst kurz nach dem Schließen von der API geliefert
-CLOSE_GRACE_S = 5
-
-
-def due_timeframes(timeframes: list[str], last_bucket: dict[str, int], now_s: float) -> list[str]:
-    """Timeframes, bei denen seit dem letzten Laden eine neue Kerze geschlossen hat."""
-    due = []
-    for tf in timeframes:
-        bucket = int((now_s - CLOSE_GRACE_S) * 1000) // INTERVAL_MS[tf]
-        if last_bucket.get(tf) != bucket:
-            due.append(tf)
-            last_bucket[tf] = bucket
-    return due
-
-
 async def run(args: argparse.Namespace) -> None:
     symbols = split_list(args.symbols, upper=True)
     timeframes = check_timeframes(split_list(args.timeframes))
@@ -70,7 +55,6 @@ async def run(args: argparse.Namespace) -> None:
              ",".join(symbols), ",".join(timeframes), args.interval,
              "aktiv" if notifier else "NICHT konfiguriert", policy.min_strength, policy.cooldown_min)
 
-    last_bucket: dict[str, int] = {}
     with CandleStore(args.db) as candles, SignalStore(args.db) as store, \
             CooldownStore(args.db) as cooldowns:
         async with BitunixPublicClient() as client:
@@ -80,9 +64,11 @@ async def run(args: argparse.Namespace) -> None:
                 while True:
                     started = time.monotonic()
                     try:
-                        due = due_timeframes(timeframes, last_bucket, time.time())
+                        now_ms = int(time.time() * 1000)
                         for sym in symbols:
-                            for tf in due:
+                            for tf in timeframes:
+                                if not needs_sync(candles, sym, tf, now_ms):
+                                    continue
                                 try:
                                     await sync_candles(client, candles, sym, tf)
                                 except BitunixError as e:

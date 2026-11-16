@@ -205,14 +205,19 @@ def test_dispatch_ohne_erfolg_kein_cooldown():
         assert cd.last_sent(sig()) is None
 
 
-# ------------------------------------------------------------------ watch-Schleife
+# ------------------------------------------------------------------ Nachlade-Prüfung
 
-def test_due_timeframes():
-    from watch import due_timeframes
+def test_needs_sync():
+    from bitunix.models import Kline
+    from data.store import CandleStore
+    from data.sync import needs_sync
 
-    last: dict[str, int] = {}
-    t0 = 1_000_000 * 3600 + 30  # 30 s nach einer vollen Stunde
-    assert due_timeframes(["1m", "1h"], last, t0) == ["1m", "1h"]   # erster Lauf: alles
-    assert due_timeframes(["1m", "1h"], last, t0 + 10) == []         # selbe Minute
-    assert due_timeframes(["1m", "1h"], last, t0 + 60) == ["1m"]     # neue Minute
-    assert due_timeframes(["1m", "1h"], last, t0 + 3600) == ["1m", "1h"]
+    H = 3_600_000
+    now = 1000 * H + 30_000  # 30 s nach Beginn der Stunde 1000 -> Kerze 999 ist fertig
+    with CandleStore(":memory:") as store:
+        assert needs_sync(store, "BTC", "1h", now)                       # leer
+        store.upsert("BTC", "1h", [Kline(998 * H, 1, 1, 1, 1, 1, 1)])
+        assert needs_sync(store, "BTC", "1h", now)                       # 999 fehlt
+        store.upsert("BTC", "1h", [Kline(999 * H, 1, 1, 1, 1, 1, 1)])
+        assert not needs_sync(store, "BTC", "1h", now)                   # aktuell
+        assert not needs_sync(store, "BTC", "1h", 1000 * H + 1_000)      # Kulanzzeit

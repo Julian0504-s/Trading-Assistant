@@ -170,3 +170,26 @@ def _style(fig: go.Figure, p: Palette, show_macd: bool) -> None:
         ann.font = dict(family=FONT, size=12, color=p.text_secondary)
         ann.x, ann.xanchor = 0, "left"
     fig.layout.annotations[0].font = dict(family=FONT, size=15, color=p.text)
+
+
+def equity_chart(equity: pd.Series, start: float, p: Palette, title: str) -> go.Figure:
+    """Kontoverlauf als Linie mit Startkapital als Referenz (eine Serie, kein Legendenfeld)."""
+    fig = go.Figure()
+    fig.add_hline(y=start, line=dict(color=p.muted, width=1, dash="dot"),
+                  annotation_text=f"Start {start:,.0f}", annotation_position="top left",
+                  annotation_font=dict(color=p.text_secondary, size=11))
+    color = p.up if (len(equity) and equity.iloc[-1] >= start) else p.down
+    fig.add_trace(go.Scatter(x=equity.index, y=equity.values, mode="lines",
+                             line=dict(color=color, width=2), name="Kontostand",
+                             hovertemplate="%{x|%d.%m.%Y %H:%M}<br>%{y:,.2f} USDT<extra></extra>"))
+    fig.update_layout(
+        height=320, margin=dict(l=10, r=10, t=40, b=30), showlegend=False,
+        title=dict(text=title, font=dict(family=FONT, size=14, color=p.text), x=0),
+        paper_bgcolor=p.surface, plot_bgcolor=p.surface,
+        font=dict(family=FONT, color=p.text_secondary, size=12), hovermode="x unified",
+        hoverlabel=dict(bgcolor=p.surface, font=dict(color=p.text)),
+    )
+    fig.update_xaxes(showgrid=False, linecolor=p.axis)
+    fig.update_yaxes(gridcolor=p.grid, zeroline=False, side="right", tickformat=",.0f",
+                     automargin=True)
+    return fig

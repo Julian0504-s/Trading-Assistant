@@ -73,6 +73,14 @@ class CandleStore:
         ).fetchone()
         return row[0]
 
+    def earliest_open_time(self, symbol: str, interval: str) -> int | None:
+        """open_time der ältesten gespeicherten Kerze oder None."""
+        row = self._conn.execute(
+            "SELECT MIN(open_time) FROM candles WHERE symbol = ? AND interval = ?",
+            (symbol, interval),
+        ).fetchone()
+        return row[0]
+
     def count(self, symbol: str, interval: str) -> int:
         row = self._conn.execute(
             "SELECT COUNT(*) FROM candles WHERE symbol = ? AND interval = ?",

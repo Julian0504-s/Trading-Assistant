@@ -4,6 +4,7 @@ Aufruf:
     uv run python scripts/fetch_candles.py
     uv run python scripts/fetch_candles.py --timeframes 1h,4h --backfill 1000
     uv run python scripts/fetch_candles.py --symbols BTCUSDT,ETHUSDT
+    uv run python scripts/fetch_candles.py --history   # lange Historie für Backtests
 
 Watchlist, Timeframes und DB-Pfad kommen aus den Umgebungsvariablen WATCHLIST,
 TIMEFRAMES und DB_PATH (siehe .env.example), sonst aus den Standardwerten unten.
@@ -20,7 +21,7 @@ from datetime import UTC, datetime
 
 from bitunix.client import INTERVAL_MS, BitunixError, BitunixPublicClient
 from data.store import CandleStore
-from data.sync import sync_candles
+from data.sync import HISTORY_DEFAULTS, backfill_history, sync_candles
 
 from common import (
     DEFAULT_DB_PATH,
@@ -48,6 +49,10 @@ async def main() -> int:
         "--backfill", type=int, default=500,
         help="Anzahl Kerzen pro Timeframe beim ersten Laden",
     )
+    parser.add_argument(
+        "--history", action="store_true",
+        help="zusätzlich lange Historie für Backtests laden (z. B. 1h: 1 Jahr, 15m: ~100 Tage)",
+    )
     parser.add_argument("--db", default=os.getenv("DB_PATH", DEFAULT_DB_PATH))
     args = parser.parse_args()
 
@@ -65,6 +70,11 @@ async def main() -> int:
                 for tf in timeframes:
                     try:
                         r = await sync_candles(client, store, symbol, tf, backfill=args.backfill)
+                        if args.history:
+                            await backfill_history(client, store, symbol, tf,
+                                                   HISTORY_DEFAULTS.get(tf, args.backfill))
+                            r = type(r)(r.symbol, r.interval, r.fetched,
+                                        store.count(symbol, tf), r.latest_open_time)
                     except BitunixError as e:
                         errors += 1
                         logging.error("%s %s: Laden fehlgeschlagen: %s", symbol, tf, e)

@@ -100,7 +100,8 @@ def test_app_laeuft_offline(db, monkeypatch):
     monkeypatch.setenv("DASHBOARD_OFFLINE", "1")
     at = AppTest.from_file(str(APP), default_timeout=30).run()
     assert not at.exception, at.exception
-    assert [t.label for t in at.tabs] == ["Marktübersicht", "Chart", "Signal-Feed"]
+    assert [t.label for t in at.tabs] == ["Marktübersicht", "Chart", "Signal-Feed", "Backtest",
+                                         "Paper Trading"]
     assert at.metric[0].label == "BTCUSDT"
     assert any("aufwärts" in m.value for m in at.markdown)  # Trend in Worten
     assert len(at.toggle) >= 4  # Chart-Schalter
@@ -146,3 +147,30 @@ def test_detail_chart_standard_schlicht_und_optionen(db):
     fig = detail_chart(df, sig, LIGHT, "x", show_ema20=True, show_bb=True, show_macd=True)
     vis = {t.name: t.visible for t in fig.data}
     assert vis["EMA 20"] is True and vis["Bollinger (20, 2)"] is True and "MACD" in vis
+
+
+def test_latest_backtest_und_paper_overview(tmp_path, db):
+    import json
+
+    from strategy import STRATEGIES
+    from strategy.paper import PaperStore, PaperTrader
+
+    assert queries.latest_backtest(str(tmp_path / "nix")) == (None, [])
+    run_dir = tmp_path / "bt" / "20260101-000000" / "trend_1h"
+    run_dir.mkdir(parents=True)
+    pd.Series([1000.0, 1010.0], index=pd.to_datetime([0, H], unit="ms", utc=True),
+              name="Kontostand").to_csv(run_dir / "equity.csv", index_label="Zeit (UTC)")
+    metrics = {"Tage": 1.0, "Trades": 2, "Trefferquote %": 50.0, "Rendite %": 1.0,
+               "Max. Drawdown %": -0.5, "Profitfaktor": 1.5, "Ø R pro Trade": 0.2,
+               "Gebühren": 1.2, "Endkapital": 1010.0}
+    (run_dir.parent / "summary.json").write_text(json.dumps(
+        [{"strategy": "trend", "label": "Trendfolge", "timeframe": "1h", "metrics": metrics}]))
+    (tmp_path / "bt" / "latest.txt").write_text("20260101-000000")
+    stamp, runs = queries.latest_backtest(str(tmp_path / "bt"))
+    assert stamp == "20260101-000000" and len(runs[0]["equity"]) == 2
+    assert queries.backtest_table(runs).iloc[0]["Rendite %"] == 1.0
+
+    with PaperStore(db) as ps:
+        PaperTrader(ps, "trend@1h", STRATEGIES["trend"], ["1h"], now=5 * H)
+    (acc,) = queries.paper_overview(db)
+    assert acc["name"] == "trend@1h" and acc["equity_now"] == 1000 and acc["trades"] == 0

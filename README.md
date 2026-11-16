@@ -5,7 +5,7 @@ Details und Phasenplan: siehe `CLAUDE.md`.
 
 > Signale sind Hinweise, keine Anlageempfehlung.
 
-## Stand: Phase 1 – Markt & Signale
+## Stand: Phase 3 – Backtesting & Paper Trading (nur Simulation)
 
 - `src/bitunix/` – async Client für die **öffentlichen** Futures-Marktdaten
   (Kerzen, Ticker, Funding Rate). Kein API-Key nötig.
@@ -20,6 +20,11 @@ Details und Phasenplan: siehe `CLAUDE.md`.
 - `scripts/show_indicators.py` – Terminal-Übersicht der aktuellen Indikatorwerte
 - `src/alerts/` – Telegram-Alerts mit Filter (Stärke, Timeframes) und Cooldown
 - `src/dashboard/` – Streamlit-Dashboard: Marktübersicht, Detail-Chart, Signal-Feed
+- `src/risk/` – Risk Manager mit harten Limits (max. 3x Hebel, max. 1 % Risiko pro
+  Trade, Stop-Loss Pflicht, Tagesverlust-Limit, Kill-Switch)
+- `src/strategy/` – Strategien, simuliertes Konto, Backtest und Paper Trading
+- `scripts/backtest.py` – Strategien × Timeframes auf historischen Kerzen testen
+- `scripts/paper_trade.py` – Paper Trading live (nur simulierte Orders)
 - `scripts/run_signals.py` – Signale erzeugen, speichern, anzeigen (optional melden)
 - `scripts/watch.py` – Dauerbetrieb: nachladen → Signale → Telegram, jede Minute
 
@@ -126,6 +131,43 @@ uv run python scripts/run_signals.py --fetch --alert   # einmaliger Durchlauf mi
 - Ohne Token läuft alles normal, es wird nur nichts verschickt.
 - Der Token wird nie geloggt (steht in der URL, daher httpx-Logging auf WARNING und
   geschwärzte Fehlermeldungen).
+
+## Backtest
+
+```bash
+uv run python scripts/fetch_candles.py --history   # einmalig: lange Historie (1h: 1 Jahr …)
+uv run python scripts/backtest.py                  # alle Strategien × alle Timeframes
+uv run python scripts/backtest.py --strategies trend --timeframes 4h,1d
+```
+
+- **Strategien:** `trend` (Trendfolge: EMA-Cross, EMA-200-Trend, Bollinger-Breakout ab
+  „mittel“, nur in Trendrichtung), `all_medium` (alle Regeln ab „mittel“), `strong`
+  (alle Regeln, nur „stark“).
+- **Ausführung:** Signal am Kerzenschluss → Einstieg zur Eröffnung der nächsten Kerze.
+  Stop 1,5 ATR, Ziel 3 ATR. Berührt eine Kerze beides, zählt der Stop. Gebühren 0,06 %
+  und Slippage 0,02 % pro Seite.
+- **Risiko:** 1 % des Kontos pro Trade, Hebel max. 3x über alle offenen Positionen,
+  Tagesverlust-Limit 3 % (danach keine neuen Trades bis zum nächsten UTC-Tag).
+- Ergebnisse in `data/backtests/<Zeitstempel>/`: Übersicht, Kontoverlauf, Order-Log als CSV.
+
+## Paper Trading
+
+```bash
+uv run python scripts/paper_trade.py                       # läuft dauerhaft (PAPER_RUNS)
+uv run python scripts/paper_trade.py --runs trend@4h,trend@1d
+uv run python scripts/paper_trade.py --status              # Kontostände
+uv run python scripts/paper_trade.py --export orders.csv   # Order-Log (CSV, für die Steuer)
+```
+
+- Jedes `strategie@timeframe` ist ein eigenes Konto (Standard 1.000 USDT), gleiche Logik
+  wie im Backtest. Zustand in SQLite, übersteht Neustarts. Beim ersten Start wird nicht
+  rückwirkend gehandelt.
+- Jede simulierte Order wird mit Grund, Preis, Größe und Zeit geloggt.
+- Mit Telegram-Konfiguration kommt zu jedem Paper-Trade eine Nachricht.
+- **Kill-Switch:** Datei `KILL_SWITCH` im Projektordner anlegen → alle Paper-Positionen
+  werden geschlossen, der Bot hält an.
+- **`DRY_RUN=true` ist Pflicht.** Es gibt keinen Code, der echte Orders sendet
+  (Live-Trading erst in Phase 4 nach Freigabe).
 
 ## Tests
 

@@ -17,6 +17,8 @@ log = logging.getLogger(__name__)
 
 # Signale an den letzten N Kerzen gelten als aktuell (werden gemeldet)
 FRESH_CANDLES = 3
+# Nur die letzten N Kerzen auswerten (EMA 200 braucht Vorlauf; ältere Signale sind gespeichert)
+SCAN_WINDOW = 600
 
 
 @dataclass
@@ -59,7 +61,7 @@ async def scan_watchlist(
 
     for sym in symbols:
         for tf in timeframes:
-            df = candles.load_df(sym, tf)
+            df = candles.load_df(sym, tf, limit=SCAN_WINDOW)
             if df.empty:
                 result.errors.append(f"{sym} {tf}: keine Kerzen in der DB")
                 continue
