@@ -232,7 +232,7 @@ Nachkauf und mehr Coins bringen keine echte Verbesserung.
 
 ```bash
 uv run python scripts/paper_trade.py                       # läuft dauerhaft (PAPER_RUNS)
-uv run python scripts/paper_trade.py --runs trend_trail@1d,trend_trail@1d+4h~0.5
+uv run python scripts/paper_trade.py --runs trend_trail@1d,trend_trail@1d+4h~0.5,trend_trail@1d+4h,trend_trail@4h
 # "1d+4h" = beide Timeframes in EINEM gemeinsamen Konto, "~0.5" = 0,5 % Risiko pro Trade
 uv run python scripts/paper_trade.py --status              # Kontostände
 uv run python scripts/paper_trade.py --export orders.csv   # Order-Log (CSV, für die Steuer)

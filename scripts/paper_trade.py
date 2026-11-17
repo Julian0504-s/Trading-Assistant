@@ -50,7 +50,7 @@ from common import (
 
 log = logging.getLogger("paper")
 
-DEFAULT_RUNS = "trend_trail@1d,trend_trail@1d+4h~0.5"
+DEFAULT_RUNS = "trend_trail@1d,trend_trail@1d+4h~0.5,trend_trail@1d+4h,trend_trail@4h"
 WINDOW = 400  # Kerzen pro Auswertung (EMA 200 braucht Vorlauf)
 
 
