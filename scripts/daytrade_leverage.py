@@ -7,7 +7,9 @@ mittlere Signalstärke, Stop 1,5 / Ziel 3 ATR, Market- oder Limit-Orders, streng
 Trendfilter 4h + 1d, ADX >= 25, Schluss zum Tagesende).
 
 Hebel 3x bis 20x, Risiko 1–5 % pro Trade, Tagesverlust-Limit AUS. Liquidation wird
-simuliert (isolierte Marge = Volumen / Hebel, Erhaltungsmarge 0,5 %). Fällt das Konto
+simuliert: isolated (Standard) = Marge je Position = Volumen / Hebel; --margin cross =
+ganzes Konto haftet, Liquidation aller Positionen bei Unterschreiten der Erhaltungsmarge
+(0,5 %). Fällt das Konto
 unter 1 % des Startkapitals, gilt es als pleite.
 
 Diese Einstellungen sind laut CLAUDE.md verboten (max. 3x, max. 1 %) und laufen nur über
@@ -49,6 +51,8 @@ def main() -> int:
     p.add_argument("--symbols", default=UNIVERSE)
     p.add_argument("--db", default=os.getenv("DB_PATH", DEFAULT_DB_PATH))
     p.add_argument("--out", default="data/research")
+    p.add_argument("--margin", choices=("isolated", "cross"), default="isolated",
+                   help="isolated: je Position eigene Marge; cross: ganzes Konto haftet")
     args = p.parse_args()
     symbols = split_list(args.symbols, upper=True)
     now = int(time.time() * 1000) // DAY * DAY
@@ -71,10 +75,10 @@ def main() -> int:
         start = now - int(months * 30.44 * DAY)
         streams = [Stream(s, tf, ltf[tf][s], strat, sigs[tf].get(s, {})) for s in ltf[tf]]
         r = run_streams(streams, start_equity=CAP, risk=rc, trade_from=start, trade_until=now,
-                        funding=funding, maker_fee=maker)
+                        funding=funding, maker_fee=maker, margin_mode=args.margin)
         eq = r.equity
         ruined = eq[eq < CAP * 0.01]
-        liqs = sum(t.exit_reason == "Liquidation" for t in r.trades)
+        liqs = sum(t.exit_reason.startswith("Liquidation") for t in r.trades)
         results.append({
             "strategy": strat.label, "months": months, "leverage": lev, "risk": risk,
             "end": r.end_equity, "ret": (r.end_equity / CAP - 1) * 100,
@@ -83,10 +87,10 @@ def main() -> int:
             "liquidations": liqs,
             "ruined": f"{ruined.index[0]:%d.%m.%Y}" if len(ruined) else None,
         })
-    print(f"{len(results)} Simulationen in {time.time() - t0:.0f}s\n")
+    print(f"{len(results)} Simulationen ({args.margin} margin) in {time.time() - t0:.0f}s\n")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "daytrade-leverage.json").write_text(json.dumps(results, ensure_ascii=False,
+    (out / f"daytrade-leverage-{args.margin}.json").write_text(json.dumps(results, ensure_ascii=False,
                                                            default=lambda o: o.item()))
 
     df = pd.DataFrame(results)
@@ -111,7 +115,7 @@ def main() -> int:
         best = df[df["months"] == m].sort_values("ret").iloc[-1]
         print(f"  Beste Kombination {m:>2} Monate: {best['strategy']} · {best['leverage']}x · "
               f"{best['risk'] * 100:.0f}% -> {best['ret']:+.0f} % ({best['end']:,.0f} USDT)")
-    print(f"\nAlle Ergebnisse: {out}/daytrade-leverage.json · Nur Simulation, keine Anlageempfehlung.")
+    print(f"\nAlle Ergebnisse: {out}/daytrade-leverage-{args.margin}.json · Nur Simulation, keine Anlageempfehlung.")
     return 0
 
 

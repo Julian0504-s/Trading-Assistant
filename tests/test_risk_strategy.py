@@ -478,3 +478,23 @@ def test_kursluecke_ueber_den_liquidationspreis():
                    time=0, stop=99, target=105, reason="x")
     trade = acc.check_exit(pos, 85, 86, 84, H)   # Eröffnung unter Stop UND Liquidation
     assert trade.exit_reason == "Liquidation"
+
+
+def test_cross_margin_liquidiert_alles_erst_bei_kontoverlust():
+    from risk import RiskManager
+
+    rm = RiskManager(RiskConfig.for_research(0.05, max_leverage=20, daily_loss_limit=1.0))
+    acc = SimAccount(1000.0, fee_rate=0.0, slippage=0.0, risk=rm, margin_mode="cross")
+    # Stop 1 % entfernt, 5 % Risiko -> je 50 Stück = 5.000 USDT Volumen (zusammen 10x)
+    a = acc.open(symbol="A", timeframe="15m", strategy="t", direction="long", price=100,
+                 time=0, stop=99, target=130, reason="x")
+    acc.open(symbol="B", timeframe="15m", strategy="t", direction="long", price=100,
+             time=0, stop=99, target=130, reason="x")
+    assert a.qty == pytest.approx(50) and a.liq_price is None   # keine Einzel-Liquidation
+    # A fällt um 6 % (−300 USDT): Konto hält noch
+    assert acc.check_cross_liquidation({("A", "15m"): 94.0}, {"A": 94.0, "B": 100.0}, H) == []
+    # Beide fallen um 11 % (−1.100 USDT > Guthaben): alles wird liquidiert, Saldo nicht < 0
+    trades = acc.check_cross_liquidation({("A", "15m"): 89.0, ("B", "15m"): 89.0},
+                                         {"A": 89.0, "B": 89.0}, 2 * H)
+    assert len(trades) == 2 and all(t.exit_reason == "Liquidation (Cross)" for t in trades)
+    assert acc.positions == {} and acc.cash == 0.0

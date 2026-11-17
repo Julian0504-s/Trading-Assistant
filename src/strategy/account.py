@@ -122,6 +122,7 @@ class SimAccount:
     next_id: int = 1
     funding_total: float = 0.0        # Summe erhaltenes (+) / gezahltes (−) Funding
     maker_fee: float | None = None    # gesetzt: Einstieg und Kursziel als Limit-Order
+    margin_mode: str = "isolated"     # isolated: je Position eigene Marge; cross: ganzes Konto
 
     def __post_init__(self) -> None:
         if self.cash == 0.0:
@@ -162,7 +163,8 @@ class SimAccount:
         self.next_id = pid + 1
         lev = self.risk.config.max_leverage
         sign = 1 if direction == "long" else -1
-        liq = fill * (1 - sign * (1 / lev - MAINTENANCE_MARGIN))
+        liq = (fill * (1 - sign * (1 / lev - MAINTENANCE_MARGIN))
+               if self.margin_mode == "isolated" else None)  # cross: Konto-Ebene
         pos = Position(pid, symbol, timeframe, strategy, direction, time, fill, qty,
                        stop, target, reason, fee, trail_atr, liq_price=liq)
         self.positions[(symbol, timeframe)] = pos
@@ -212,6 +214,23 @@ class SimAccount:
         self.cash += total
         self.funding_total += total
         return total
+
+    def check_cross_liquidation(self, worst: dict[tuple[str, str], float],
+                                prices: dict[str, float], time: int) -> list[Trade]:
+        """Cross Margin: Liquidation ALLER Positionen, wenn das Konto (zu den ungünstigsten
+        Kursen `worst` je Position, sonst `prices`) unter die Erhaltungsmarge fällt.
+        Ein Minus-Saldo wird auf 0 gesetzt (die Börse deckt den Rest ab)."""
+        if self.margin_mode != "cross" or not self.positions:
+            return []
+        price = lambda p: worst.get((p.symbol, p.timeframe), prices.get(p.symbol, p.entry_price))  # noqa: E731
+        equity = self.cash + sum(p.unrealized(price(p)) for p in self.positions.values())
+        notional = sum(p.qty * price(p) for p in self.positions.values())
+        if equity > MAINTENANCE_MARGIN * notional:
+            return []
+        trades = [self.close(p, price(p), time, "Liquidation (Cross)")
+                  for p in list(self.positions.values())]
+        self.cash = max(self.cash, 0.0)
+        return trades
 
     def add_to(self, pos: Position, price: float, time: int, reason: str,
                prices: dict[str, float] | None = None) -> bool:

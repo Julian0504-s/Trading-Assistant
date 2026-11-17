@@ -114,12 +114,13 @@ def run_streams(
     funding: dict[str, pd.DataFrame] | None = None,
     fee_rate: float | None = None,
     maker_fee: float | None = None,
+    margin_mode: str = "isolated",
 ) -> BacktestResult:
     """Mehrere Streams (Symbol × Timeframe × Strategie) in einem gemeinsamen Konto.
     `funding`: je Symbol eine Tabelle (time, rate, mark) – siehe data.funding.funding_schedule.
     Ohne `funding` wird kein Funding abgerechnet."""
     acc = SimAccount(start_equity, mode="backtest", risk=RiskManager(risk or RiskConfig()),
-                     maker_fee=maker_fee)
+                     maker_fee=maker_fee, margin_mode=margin_mode)
     if fee_rate is not None:
         acc.fee_rate = fee_rate
     arrs = [_Arrays(s.df) for s in streams]
@@ -213,6 +214,10 @@ def run_streams(
         if pos is not None:
             acc.check_exit(pos, a.o[i], a.h[i], a.l[i], t, atr)
         last_close[s.symbol] = a.c[i]
+        if margin_mode == "cross":
+            worst = {k2: (a.l[i] if p.direction == "long" else a.h[i])
+                     for k2, p in acc.positions.items() if p.symbol == s.symbol}
+            acc.check_cross_liquidation(worst, last_close, t)
         if strat.flat_at_day_end and t % 86_400_000 == 0:
             pos = acc.positions.get(key)
             if pos is not None:
