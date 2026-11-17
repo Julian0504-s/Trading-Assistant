@@ -85,3 +85,16 @@ tests/
 - Indikatoren und Signale mit Tests abdecken (bekannte Beispieldaten).
 - Signale sind Hinweise, keine Anlageempfehlung. Im Dashboard dezent so kennzeichnen.
 - Sprache für UI und Kommentare: Deutsch.
+
+## Aktueller Stand (gemerkt)
+
+- Phase 3 (Backtesting & Paper Trading) am 16.11.2026 freigegeben. Phase 2 übersprungen,
+  Phase 4 NICHT freigegeben.
+- **Die 4 Paper-Konten** (je 10.000 USDT, 10 Coins: BTC, ETH, SOL, XRP, DOGE, BNB, ADA,
+  LINK, ZEC, AVAX) – Standard in `scripts/paper_trade.py` und `PAPER_RUNS`:
+  1. `trend_trail@1d` – Tageschart, 1 % Risiko (ruhigste Variante)
+  2. `trend_trail@1d+4h~0.5` – 1d + 4h in einem Konto, 0,5 % Risiko (bestes Rendite/Risiko)
+  3. `trend_trail@1d+4h` – 1d + 4h, 1 % Risiko (offensiv, Rückgänge bis ~−58 % im Backtest)
+  4. `trend_trail@4h` – nur 4h, 1 % Risiko (im Bitunix-Prüfjahr durchgefallen, nur Beobachtung)
+- Daytrading (1m–1h) hat in allen Tests verloren – auch mit Hebel, Cross Margin, weiten Stops.
+- Isolated Margin bevorzugen.
