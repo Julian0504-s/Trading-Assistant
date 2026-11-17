@@ -436,7 +436,45 @@ def test_forschungsmodus_nur_fuer_backtest(tmp_path):
     with pytest.raises(ValueError):
         RiskConfig.for_research(0.06)                         # auch hier eine Obergrenze
     with pytest.raises(ValueError):
-        RiskConfig.for_research(0.02, max_leverage=5)         # Hebel bleibt hart begrenzt
+        RiskConfig.for_research(0.02, max_leverage=25)        # auch im Forschungsmodus max. 20x
+    with pytest.raises(ValueError):
+        RiskConfig(max_leverage=5)                            # normal weiterhin max. 3x
+    assert RiskConfig.for_research(0.02, max_leverage=20, daily_loss_limit=1.0).max_leverage == 20
     with PaperStore(tmp_path / "p.db") as ps:
         with pytest.raises(ValueError):
             PaperTrader(ps, "x@1d", STRATEGIES["trend_trail"], ["1d"], risk=rc)
+
+
+
+# ------------------------------------------------------------------- Liquidation
+
+def test_liquidation_vor_dem_stop_bei_hohem_hebel():
+    from risk import RiskManager
+
+    rm = RiskManager(RiskConfig.for_research(0.05, max_leverage=20, daily_loss_limit=1.0))
+    acc = SimAccount(1000.0, fee_rate=0.0, slippage=0.0, risk=rm)
+    # Stop 10 % entfernt, Liquidation bei 20x schon nach 1/20 - 0,5 % = 4,5 %
+    pos = acc.open(symbol="X", timeframe="15m", strategy="t", direction="long", price=100,
+                   time=0, stop=90, target=130, reason="x")
+    assert pos.liq_price == pytest.approx(95.5)
+    trade = acc.check_exit(pos, 99, 99, 94, H)
+    assert trade.exit_reason == "Liquidation" and trade.exit_price == pytest.approx(95.5)
+
+
+def test_bei_3x_greift_der_stop_vor_der_liquidation():
+    acc = SimAccount(1000.0, fee_rate=0.0, slippage=0.0)
+    pos = acc.open(symbol="X", timeframe="1d", strategy="t", direction="short", price=100,
+                   time=0, stop=110, target=80, reason="x")
+    assert pos.liq_price == pytest.approx(100 * (1 + 1 / 3 - 0.005))
+    assert acc.check_exit(pos, 101, 112, 100, H).exit_reason == "Stop-Loss"
+
+
+def test_kursluecke_ueber_den_liquidationspreis():
+    from risk import RiskManager
+
+    rm = RiskManager(RiskConfig.for_research(0.01, max_leverage=10))
+    acc = SimAccount(1000.0, fee_rate=0.0, slippage=0.0, risk=rm)
+    pos = acc.open(symbol="X", timeframe="1h", strategy="t", direction="long", price=100,
+                   time=0, stop=99, target=105, reason="x")
+    trade = acc.check_exit(pos, 85, 86, 84, H)   # Eröffnung unter Stop UND Liquidation
+    assert trade.exit_reason == "Liquidation"

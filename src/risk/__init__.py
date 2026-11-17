@@ -3,6 +3,7 @@
 from .manager import (
     HARD_MAX_LEVERAGE,
     HARD_MAX_RISK_PER_TRADE,
+    MAINTENANCE_MARGIN,
     RiskConfig,
     RiskManager,
     RiskViolation,
@@ -12,6 +13,7 @@ from .manager import (
 __all__ = [
     "HARD_MAX_LEVERAGE",
     "HARD_MAX_RISK_PER_TRADE",
+    "MAINTENANCE_MARGIN",
     "RiskConfig",
     "RiskManager",
     "RiskViolation",

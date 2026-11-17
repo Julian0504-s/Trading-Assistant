@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from risk import RiskManager, RiskViolation
+from risk import MAINTENANCE_MARGIN, RiskManager, RiskViolation
 
 FEE_RATE = 0.0006   # 0,06 % pro Seite (Taker-Gebühr, konservativ)
 SLIPPAGE = 0.0002   # 0,02 % ungünstigere Ausführung
@@ -38,6 +38,7 @@ class Position:
     units: int = 1                    # 1 + Anzahl Nachkäufe
     risk_amount: float | None = None  # ursprünglich eingesetztes Risiko in USDT (für R)
     last_add_price: float | None = None
+    liq_price: float | None = None    # Liquidationspreis (isolierte Marge), None = keiner
 
     def __post_init__(self) -> None:
         if self.initial_stop is None:
@@ -159,8 +160,11 @@ class SimAccount:
         self.cash -= fee
         pid = next(self._ids)
         self.next_id = pid + 1
+        lev = self.risk.config.max_leverage
+        sign = 1 if direction == "long" else -1
+        liq = fill * (1 - sign * (1 / lev - MAINTENANCE_MARGIN))
         pos = Position(pid, symbol, timeframe, strategy, direction, time, fill, qty,
-                       stop, target, reason, fee, trail_atr)
+                       stop, target, reason, fee, trail_atr, liq_price=liq)
         self.positions[(symbol, timeframe)] = pos
         self._log(pos, time, "Eröffnung", "Kauf" if direction == "long" else "Verkauf",
                   fill, fee, None, reason)
@@ -254,6 +258,14 @@ class SimAccount:
         return trade
 
     def _exit(self, pos: Position, o: float, h: float, low: float, time: int) -> Trade | None:
+        # Liquidation: greift, wenn der Liquidationspreis VOR dem Stop liegt und erreicht
+        # wird, oder wenn der Kurs über Stop und Liquidationspreis hinweg springt.
+        liq = pos.liq_price
+        if liq is not None:
+            if pos.direction == "long" and (o <= liq or (low <= liq and liq > pos.stop)):
+                return self.close(pos, liq, time, "Liquidation")
+            if pos.direction == "short" and (o >= liq or (h >= liq and liq < pos.stop)):
+                return self.close(pos, liq, time, "Liquidation")
         if pos.direction == "long":
             if o <= pos.stop:
                 return self.close(pos, o, time, "Stop-Loss (Kurslücke)")

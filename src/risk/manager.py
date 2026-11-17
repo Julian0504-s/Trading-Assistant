@@ -20,6 +20,8 @@ HARD_MAX_LEVERAGE = 3.0
 HARD_MAX_RISK_PER_TRADE = 0.01
 HARD_MAX_DAILY_LOSS = 0.05  # Obergrenze für das konfigurierbare Tagesverlust-Limit
 RESEARCH_MAX_RISK_PER_TRADE = 0.05  # nur für Backtest-Vergleiche (for_research)
+RESEARCH_MAX_LEVERAGE = 20.0        # nur für Backtest-Vergleiche (for_research)
+MAINTENANCE_MARGIN = 0.005          # Erhaltungsmarge für die Liquidations-Simulation
 
 
 class RiskViolation(Exception):
@@ -36,17 +38,20 @@ class RiskConfig:
     research_only: bool = False
 
     def __post_init__(self) -> None:
-        if not 0 < self.max_leverage <= HARD_MAX_LEVERAGE:
-            raise ValueError(f"max_leverage muss in (0, {HARD_MAX_LEVERAGE}] liegen")
+        max_lev = RESEARCH_MAX_LEVERAGE if self.research_only else HARD_MAX_LEVERAGE
+        if not 0 < self.max_leverage <= max_lev:
+            raise ValueError(f"max_leverage muss in (0, {max_lev}] liegen")
         max_risk = RESEARCH_MAX_RISK_PER_TRADE if self.research_only else HARD_MAX_RISK_PER_TRADE
         if not 0 < self.risk_per_trade <= max_risk:
             raise ValueError(f"risk_per_trade muss in (0, {max_risk}] liegen")
-        if not 0 < self.daily_loss_limit <= HARD_MAX_DAILY_LOSS:
-            raise ValueError(f"daily_loss_limit muss in (0, {HARD_MAX_DAILY_LOSS}] liegen")
+        max_daily = 1.0 if self.research_only else HARD_MAX_DAILY_LOSS
+        if not 0 < self.daily_loss_limit <= max_daily:
+            raise ValueError(f"daily_loss_limit muss in (0, {max_daily}] liegen")
 
     @classmethod
     def for_research(cls, risk_per_trade: float, **kw) -> RiskConfig:
-        """Backtest-Vergleich mit höherem Risiko pro Trade (max. 5 %). Hebel bleibt <= 3x.
+        """Backtest-Vergleich mit höherem Risiko pro Trade (max. 5 %), optional mehr Hebel
+        (max. 20x) und abgeschaltetem Tagesverlust-Limit (daily_loss_limit=1.0).
         NIE für Paper Trading oder Live – dort wird so eine Konfiguration abgelehnt."""
         return cls(risk_per_trade=risk_per_trade, research_only=True, **kw)
 
