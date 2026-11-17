@@ -116,6 +116,7 @@ def run_streams(
     maker_fee: float | None = None,
     margin_mode: str = "isolated",
     slippage: float | None = None,
+    holding_cost: float = 0.0,
 ) -> BacktestResult:
     """Mehrere Streams (Symbol × Timeframe × Strategie) in einem gemeinsamen Konto.
     `funding`: je Symbol eine Tabelle (time, rate, mark) – siehe data.funding.funding_schedule.
@@ -189,7 +190,8 @@ def run_streams(
             if any(p.symbol == sym for p in acc.positions.values()):
                 mark = marks[i] if not math.isnan(marks[i]) else last_close.get(sym)
                 if mark:
-                    acc.apply_funding(sym, float(rates[i]), float(mark), t)
+                    acc.apply_funding(sym, float(rates[i]), float(mark), t,
+                                      holding_cost=holding_cost)
             continue
         s, a, strat = streams[k], arrs[k], streams[k].strategy
         key = (s.symbol, s.timeframe)

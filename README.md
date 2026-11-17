@@ -242,6 +242,21 @@ Gold über PAXG (1 Token = 1 Unze Gold), EUR/USD über EUR/USDT. Silber ist nich
 Halten: +15 %), auf EUR/USD alle im Minus (−0,5 bis −5 % pro Jahr). Als Beimischung zu den
 10 Coins bringt Gold +1,2 Prozentpunkte pro Jahr bei etwas mehr Rückgang – vernachlässigbar.
 
+## Forex-Test (ECB-Referenzkurse ab 1999)
+
+```bash
+uv run python scripts/fetch_forex.py    # 10 Paare aus den ECB-Referenzkursen -> data/forex.db
+uv run python scripts/forex_test.py
+```
+
+An Forex angepasste Strategien (Parameter aus der Literatur, nicht angepasst): Turtle 55
+(Ausbruch 55 Tage), Turtle 55 mit EMA-200-Filter, EMA 50/200 immer im Markt,
+Zeitreihen-Momentum (monatlich), dazu `trend_trail` als Vergleich. Entwicklung 1999–2015,
+Prüfung 2016–heute, Forex-Kosten inkl. Haltegebühr. Nur ein Kurs pro Tag (ECB), Stops greifen
+zum Tageskurs. Stand 17.11.2026: Nur Turtle 55 ist in beiden Zeiträumen positiv
+(3x: +20,7 % p.a. bis 2015, +5,0 % p.a. ab 2016, max. Rückgang −27 %); Momentum und
+EMA 50/200 verlieren ab 2016, `trend_trail` liegt ab 2016 bei −0,2 % p.a.
+
 ## Paper Trading
 
 ```bash

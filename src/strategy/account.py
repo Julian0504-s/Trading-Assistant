@@ -193,7 +193,7 @@ class SimAccount:
         return trade
 
     def apply_funding(self, symbol: str, rate: float, mark: float, time: int,
-                      opened_before: int | None = None) -> float:
+                      opened_before: int | None = None, holding_cost: float = 0.0) -> float:
         """Funding-Abrechnung für alle offenen Positionen eines Symbols.
         Positive Rate: Long zahlt, Short bekommt (negative Rate umgekehrt).
         Gibt die Summe (+ erhalten / − gezahlt) zurück."""
@@ -204,7 +204,8 @@ class SimAccount:
             if opened_before is not None and pos.entry_time >= opened_before:
                 continue  # zur Abrechnung noch nicht offen
             sign = 1 if pos.direction == "long" else -1
-            amount = -sign * rate * pos.qty * mark
+            # Funding (Long zahlt bei positiver Rate) + optionale Haltegebühr für beide Seiten
+            amount = -sign * rate * pos.qty * mark - holding_cost * pos.qty * mark
             pos.funding += amount
             total += amount
             self.orders.append(Order(time, self.mode, pos.strategy, pos.symbol, pos.timeframe,

@@ -90,3 +90,13 @@ def test_backtest_rechnet_funding_ab():
     # Position ab Eröffnung Tag 221 bis Ende (Tag 259): Abrechnungen ab 221 + 8 h
     n = len([x for x in sched["time"] if 221 * D < x < 259 * D + D])
     assert paid == pytest.approx(n * 0.001 * 100 * t.qty, rel=0.01)
+
+
+def test_haltegebuehr_fuer_long_und_short():
+    acc = SimAccount(1000.0, fee_rate=0.0, slippage=0.0)
+    acc.open(symbol="EURUSD", timeframe="1d", strategy="t", direction="long", price=1.0,
+             time=0, stop=0.98, target=1.1, reason="x")               # 500 Stück
+    acc.open(symbol="EURUSD", timeframe="4h", strategy="t", direction="short", price=1.0,
+             time=0, stop=1.02, target=0.9, reason="x")
+    paid = acc.apply_funding("EURUSD", 0.0, 1.0, F8, holding_cost=0.0001)
+    assert paid == pytest.approx(-2 * 500 * 0.0001)                    # beide zahlen
