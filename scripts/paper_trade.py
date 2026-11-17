@@ -3,6 +3,7 @@
 Aufruf:
     uv run python scripts/paper_trade.py                         # Standard-Konten (PAPER_RUNS)
     uv run python scripts/paper_trade.py --runs trend@1h,trend@4h
+    uv run python scripts/paper_trade.py --once                  # ein Durchlauf (für cron)
     uv run python scripts/paper_trade.py --status                # Kontostände anzeigen
     uv run python scripts/paper_trade.py --export orders.csv     # Order-Log als CSV
 
@@ -155,6 +156,9 @@ async def run(args: argparse.Namespace) -> None:
                         log.error("Fehler im Durchlauf: %s", e)
                     except Exception:
                         log.exception("Fehler im Durchlauf")
+                    if args.once:
+                        log.info("Einmaliger Durchlauf beendet (--once).")
+                        return
                     await asyncio.sleep(max(1.0, args.interval - (time.monotonic() - started)))
             finally:
                 if notifier:
@@ -189,6 +193,8 @@ def main() -> int:
     p.add_argument("--capital", type=float, default=float(os.getenv("PAPER_CAPITAL", "10000")))
     p.add_argument("--db", default=os.getenv("DB_PATH", DEFAULT_DB_PATH))
     p.add_argument("--interval", type=int, default=60, help="Sekunden zwischen Durchläufen")
+    p.add_argument("--once", action="store_true",
+                   help="nur einen Durchlauf machen und beenden (für Aufgabenplanung/cron)")
     p.add_argument("--status", action="store_true", help="Kontostände anzeigen und beenden")
     p.add_argument("--export", metavar="CSV", help="Order-Log aller Paper-Konten exportieren")
     args = p.parse_args()

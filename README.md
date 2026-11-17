@@ -245,6 +245,14 @@ uv run python scripts/paper_trade.py --export orders.csv   # Order-Log (CSV, fü
 - Mit Telegram-Konfiguration kommt zu jedem Paper-Trade eine Nachricht.
 - **Kill-Switch:** Datei `KILL_SWITCH` im Projektordner anlegen → alle Paper-Positionen
   werden geschlossen, der Bot hält an.
+- **Über Wochen auf dem eigenen Rechner laufen lassen:** Entweder dauerhaft
+  `uv run python scripts/paper_trade.py` in einem offenen Terminal, oder per Aufgabenplanung
+  stündlich `uv run python scripts/paper_trade.py --once` (ein Durchlauf, dann Ende).
+  Verpasste Kerzen und Funding-Abrechnungen holt der Bot beim nächsten Lauf nach – für die
+  1d-Strategie reicht es, wenn der Rechner mehrmals täglich läuft.
+  - Linux/macOS (cron, stündlich): `7 * * * * cd /pfad/zu/trading-assistant && uv run python scripts/paper_trade.py --once >> paper.log 2>&1`
+  - Windows: Aufgabenplanung → Aufgabe erstellen → Trigger „täglich, alle 1 Stunde wiederholen“ →
+    Aktion `uv` mit Argumenten `run python scripts/paper_trade.py --once`, „Starten in“ = Projektordner.
 - **`DRY_RUN=true` ist Pflicht.** Es gibt keinen Code, der echte Orders sendet
   (Live-Trading erst in Phase 4 nach Freigabe).
 
