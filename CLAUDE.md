@@ -98,3 +98,16 @@ tests/
   4. `trend_trail@4h` – nur 4h, 1 % Risiko (im Bitunix-Prüfjahr durchgefallen, nur Beobachtung)
 - Daytrading (1m–1h) hat in allen Tests verloren – auch mit Hebel, Cross Margin, weiten Stops.
 - Isolated Margin bevorzugen.
+
+## Aktueller Stand (17.11.2026)
+
+- Phase 3 (Backtesting & Paper Trading) ist freigegeben und umgesetzt. Phase 2 und 4 noch nicht.
+- Beste Strategie: `trend_trail` (Trendfolge mit Trailing-Stop: Stop 3 ATR, Trailing 4 ATR) auf 10 Coins
+  (BTC, ETH, SOL, XRP, DOGE, BNB, ADA, LINK, ZEC, AVAX).
+- **Gemerkte Paper-Konten (je 10.000 USDT), die verglichen werden sollen:**
+  1. `trend_trail@1d` – Tageschart, 1 % Risiko (ruhigste Variante)
+  2. `trend_trail@1d+4h~0.5` – 1d + 4h in einem Konto, 0,5 % Risiko
+  3. `trend_trail@1d+4h` – 1d + 4h in einem Konto, 1 % Risiko (offensiv)
+  4. `trend_trail@4h` – nur 4h, 1 % Risiko
+- Getestet und verworfen: Daytrading (15m/1h, auch mit Hebel bis 20x, Cross Margin, weiten Stops),
+  1m–15m, mehr als 10 Coins, Nachkauf, Nur-Long, BTC-Filter. Details in README.md.

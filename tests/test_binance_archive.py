@@ -40,3 +40,9 @@ def test_unerwarteter_zip_inhalt():
 
 def test_months():
     assert months("2019-11", "2020-02") == ["2019-11", "2019-12", "2020-01", "2020-02"]
+
+
+def test_mikrosekunden_werden_zu_millisekunden():
+    row = "1735689600000000,1.03,1.04,1.02,1.035,1000,1735775999999999,1035,10,1,1,0"
+    (k,) = parse_klines(zipped(row))
+    assert k.open_time == 1735689600000          # 01.01.2025 in ms

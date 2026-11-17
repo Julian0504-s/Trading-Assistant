@@ -115,6 +115,7 @@ def run_streams(
     fee_rate: float | None = None,
     maker_fee: float | None = None,
     margin_mode: str = "isolated",
+    slippage: float | None = None,
 ) -> BacktestResult:
     """Mehrere Streams (Symbol × Timeframe × Strategie) in einem gemeinsamen Konto.
     `funding`: je Symbol eine Tabelle (time, rate, mark) – siehe data.funding.funding_schedule.
@@ -123,6 +124,8 @@ def run_streams(
                      maker_fee=maker_fee, margin_mode=margin_mode)
     if fee_rate is not None:
         acc.fee_rate = fee_rate
+    if slippage is not None:
+        acc.slippage = slippage
     arrs = [_Arrays(s.df) for s in streams]
     steps = [INTERVAL_MS[s.timeframe] for s in streams]
 

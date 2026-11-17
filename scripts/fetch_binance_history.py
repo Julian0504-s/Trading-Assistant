@@ -30,6 +30,8 @@ def main() -> int:
     p.add_argument("--start", default="2019-09")
     p.add_argument("--timeframe", default="1d")
     p.add_argument("--db", default="data/binance.db")
+    p.add_argument("--market", choices=("futures", "spot"), default="futures",
+                   help="spot z. B. für PAXGUSDT (Gold) oder EURUSDT (EUR/USD)")
     args = p.parse_args()
     setup_logging()
     last_month = (datetime.now(UTC).replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
@@ -40,13 +42,13 @@ def main() -> int:
             n_k = n_f = 0
             first = None
             for m in ms:
-                data = fetch_month(client, "klines", sym, m, args.timeframe)
+                data = fetch_month(client, "klines", sym, m, args.timeframe, args.market)
                 if data:
                     kl = parse_klines(data)
                     cs.upsert(sym, args.timeframe, kl)
                     n_k += len(kl)
                     first = first or m
-                fd = fetch_month(client, "funding", sym, m)
+                fd = fetch_month(client, "funding", sym, m, market=args.market)
                 if fd:
                     rows = parse_funding(fd)
                     fs.upsert(sym, rows)

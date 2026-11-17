@@ -228,6 +228,20 @@ Rückgang besser als die Basis; mit 0,5 % Risiko pro Trade (`trend_trail@1d+4h~0
 Endstand 152.123, tiefster Stand 9.979, höchster 178.947 USDT (Basis: 60.655 / 9.781 / 69.255).
 Nachkauf und mehr Coins bringen keine echte Verbesserung.
 
+## Gold und EUR/USD (Binance-Archiv, Spot)
+
+```bash
+uv run python scripts/fetch_binance_history.py --market spot --symbols PAXGUSDT,EURUSDT --timeframe 1d --start 2020-01 --db data/markets.db
+uv run python scripts/fetch_binance_history.py --market spot --symbols PAXGUSDT,EURUSDT --timeframe 4h --start 2020-01 --db data/markets.db
+uv run python scripts/markets_test.py
+```
+
+Gold über PAXG (1 Token = 1 Unze Gold), EUR/USD über EUR/USDT. Silber ist nicht testbar
+(Daten erst ab 2026); Stooq und Dukascopy sind vom Cloud-Server aus gesperrt. Stand
+17.11.2026: Auf Gold liegen alle vier Varianten nur bei −0,2 bis +1,1 % pro Jahr (Kaufen und
+Halten: +15 %), auf EUR/USD alle im Minus (−0,5 bis −5 % pro Jahr). Als Beimischung zu den
+10 Coins bringt Gold +1,2 Prozentpunkte pro Jahr bei etwas mehr Rückgang – vernachlässigbar.
+
 ## Paper Trading
 
 ```bash

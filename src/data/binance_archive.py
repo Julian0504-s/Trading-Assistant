@@ -21,7 +21,9 @@ from bitunix.models import Kline
 
 log = logging.getLogger(__name__)
 
-BASE = "https://data.binance.vision/data/futures/um/monthly"
+ROOT = "https://data.binance.vision/data"
+BASE = f"{ROOT}/futures/um/monthly"  # USDT-M-Futures (Standard)
+SPOT = f"{ROOT}/spot/monthly"         # Spot, z. B. PAXGUSDT (Gold-Token) oder EURUSDT
 
 
 def _rows(zip_bytes: bytes) -> list[list[str]]:
@@ -35,11 +37,16 @@ def _rows(zip_bytes: bytes) -> list[list[str]]:
     return [r for r in rows if r and r[0].strip().lstrip("-").isdigit()]
 
 
+def _to_ms(t: int) -> int:
+    """Binance-Spot-Dateien nutzen seit 2025 Mikrosekunden statt Millisekunden."""
+    return t // 1000 if t > 10**14 else t
+
+
 def parse_klines(zip_bytes: bytes) -> list[Kline]:
     """Spalten: open_time, open, high, low, close, volume, close_time, quote_volume, ..."""
     out = []
     for r in _rows(zip_bytes):
-        out.append(Kline(open_time=int(r[0]), open=float(r[1]), high=float(r[2]),
+        out.append(Kline(open_time=_to_ms(int(r[0])), open=float(r[1]), high=float(r[2]),
                          low=float(r[3]), close=float(r[4]), base_vol=float(r[5]),
                          quote_vol=float(r[7])))
     return out
@@ -47,7 +54,7 @@ def parse_klines(zip_bytes: bytes) -> list[Kline]:
 
 def parse_funding(zip_bytes: bytes) -> list[tuple[int, float, float]]:
     """Spalten: calc_time, funding_interval_hours, last_funding_rate (Bruch)."""
-    return [(int(r[0]), float(r[2]), float("nan")) for r in _rows(zip_bytes)]
+    return [(_to_ms(int(r[0])), float(r[2]), float("nan")) for r in _rows(zip_bytes)]
 
 
 def months(start: str, end: str) -> list[str]:
@@ -61,9 +68,12 @@ def months(start: str, end: str) -> list[str]:
 
 
 def fetch_month(client: httpx.Client, kind: str, symbol: str, month: str,
-                timeframe: str = "1d") -> bytes | None:
+                timeframe: str = "1d", market: str = "futures") -> bytes | None:
+    base = SPOT if market == "spot" else BASE
     if kind == "klines":
-        url = f"{BASE}/klines/{symbol}/{timeframe}/{symbol}-{timeframe}-{month}.zip"
+        url = f"{base}/klines/{symbol}/{timeframe}/{symbol}-{timeframe}-{month}.zip"
+    elif market == "spot":
+        return None  # Spot hat kein Funding
     else:
         url = f"{BASE}/fundingRate/{symbol}/{symbol}-fundingRate-{month}.zip"
     for attempt in range(5):
